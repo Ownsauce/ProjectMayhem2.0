@@ -1,0 +1,111 @@
+# Unity-generated and machine-local files
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+[Pp]rofilerCaptures/
+[Pp]references/
+
+# Unity-generated project files (standalone project files elsewhere are source)
+/AO.Unity/*.csproj
+/AO.Unity/*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+.vs/
+.idea/
+.vscode/
+
+# .NET build output
+**/bin/
+**/obj/
+artifacts/
+
+# Unity crash and build artifacts
+sysinfo.txt
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+.tmp_*
+/tmp/
+
+# Local secrets and signing material
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+*.keystore
+
+# Unity editor recovery data
+/AO.Unity/Assets/_Recovery/
+/AO.Unity/ao_screenshot_*.png
+
+# Local absolute links into the repository; recreate after cloning (DATA_SETUP.md)
+/AO.Unity/Assets/External/AO.Client
+/AO.Unity/Assets/External/AO.Client.meta
+/AO.Unity/Assets/External/AO.Core
+/AO.Unity/Assets/External/AO.Core.meta
+
+# Restored by Unity Package Manager from Packages/manifest.json
+/AO.Unity/Packages/com.unity.inputsystem/
+
+# Locally obtained or generated Anarchy Online data
+#
+# These paths may contain extracted game data, textures, meshes, and other
+# copyrighted material. They are intentionally not distributed with this
+# source repository. See DATA_SETUP.md.
+/AO.Unity/Assets/StreamingAssets/AOData/
+/AO.Unity/Assets/StreamingAssets/AOData.meta
+/AO.Unity/Assets/Resources/WorldMeshes/
+/AO.Unity/Assets/Resources/WorldMeshes.meta
+/AO.Unity/Assets/Resources/CharacterMeshes/
+/AO.Unity/Assets/Resources/CharacterMeshes.meta
+/AO.Unity/Assets/Resources/ItemMeshes/
+/AO.Unity/Assets/Resources/ItemMeshes.meta
+/AO.Core/Data/
+/AO.Core/Data.meta
+/AO.Server/Data/
+/AO.Tools/Data/
+/AO.Tools/Data.meta
+
+# Stray Unity metadata for ignored build-output directories
+**/bin.meta
+**/obj.meta
+
+# Local Codex/agent configuration
+/.agents/
+/.codex/
+
+# Third-party tool obtained separately from its upstream repository
+/_external/AOStatelParser/

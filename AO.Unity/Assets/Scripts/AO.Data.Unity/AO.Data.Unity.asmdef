@@ -1,0 +1,17 @@
+{
+    "name": "AO.Data.Unity",
+    "rootNamespace": "AO.Data.Unity",
+    "references": [
+        "GUID:db27813e65e11ca40974a8d0ee14a28a",
+        "GUID:0a314f6dcfd3ef34594f563ee8b6f2f8"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

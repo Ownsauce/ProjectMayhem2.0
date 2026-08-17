@@ -1,0 +1,22 @@
+{
+    "name": "AO.Unity",
+    "rootNamespace": "",
+    "references": [
+        "GUID:0a314f6dcfd3ef34594f563ee8b6f2f8",
+        "GUID:1f2ef0f3d6785b543b3d0a57de1ee320",
+        "GUID:75469ad4d38634e559750d17036d5f7c",
+        "GUID:eeadd3a546fa7174795b279325490c9e",
+        "GUID:af957c4ff03497e43a033c07c621478d",
+        "GUID:db27813e65e11ca40974a8d0ee14a28a",
+        "glTFast"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

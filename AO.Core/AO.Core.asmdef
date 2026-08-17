@@ -1,0 +1,16 @@
+{
+    "name": "AO.Core",
+    "rootNamespace": "",
+    "references": [
+        "GUID:db27813e65e11ca40974a8d0ee14a28a"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
