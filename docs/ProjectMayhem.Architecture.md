@@ -5,10 +5,12 @@
 ProjectMayhem is currently a Unity-heavy prototype with a shared C# gameplay core. The target architecture should be:
 
 - `AO.Core`: gameplay rules, stats, items, modifiers, progression, simulation primitives.
-- `AO.Server`: authoritative runtime, game-data bootstrap, session state, world state, validation, persistence, networking.
+- `AO.Server`: Project Mayhem's current authoritative runtime and a future mock,
+  test harness, or optional compatible backend.
 - `AO.Unity`: client-side presentation, world rendering, input, camera, local UI, optional prediction.
 - `AO.Tools`: local experiments and offline tooling.
-- `AO.Client`: reserved for a future non-Unity or shared client layer; currently minimal.
+- `AO.Client`: backend-neutral client state plus adapters for the live service,
+  Ithaca, AORebirth, and other supported servers; currently minimal.
 
 ## What Exists Today
 
@@ -35,9 +37,9 @@ Target MMO-style behavior should keep this two-stage structure explicit:
 
 This keeps first-paint and character flow responsive while deferring heavy world work until it is actually needed.
 
-## Recommended Authority Boundary
+## Recommended Client/Server Boundary
 
-The server should own:
+Whichever server the user connects to should own:
 
 - Character identity, inventory, equipment, stats, skill spending, XP, and progression.
 - Item definitions, item instances, stat maps, breed/profession tuning, slot rules, and derived stat inputs.
@@ -46,7 +48,7 @@ The server should own:
 - Zone lifecycle policy (warm/active/sleep), including idle timeout behavior.
 - Area/chunk interest management and spawn streaming policy.
 
-The Unity client should own:
+Project Mayhem should own:
 
 - Camera, controls, animation, VFX, audio, HUD, drag/drop UX, and scene presentation.
 - Sending player intents to the server.
@@ -78,10 +80,13 @@ The Unity client should not be the source of truth for:
 ## Near-Term Migration Guidance
 
 1. Keep rules in `AO.Core`.
-2. Move authoritative bootstrap and runtime orchestration into `AO.Server`.
-3. Treat `AODataManager` as a Unity adapter, not the long-term source of authority.
-4. Replace direct client-side state mutation with intent submission to `AO.Server`.
-5. Add persistence and networking on top of the new server-side authority layer.
+2. Define stable intents and client-domain events in `AO.Client`.
+3. Add isolated protocol adapters per supported server and version.
+4. Treat `AODataManager` as a Unity adapter, not the source of live authority.
+5. Replace direct client-side state mutation with intent submission through the
+   selected backend adapter.
+6. Retain `AO.Server` as the existing Project Mayhem backend and a deterministic
+   integration-test target.
 
 ## Zone Scalability Direction
 

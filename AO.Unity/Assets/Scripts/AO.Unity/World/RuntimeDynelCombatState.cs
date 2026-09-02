@@ -45,6 +45,7 @@ namespace AO.Unity.World
                 return CurrentHealth;
 
             currentHealth = Mathf.Clamp(CurrentHealth - amount, 0, MaxHealth);
+            RuntimeDamageIndicator.Spawn(transform, amount);
             if (currentHealth <= 0)
             {
                 TryStartDeathAnimationImmediate();

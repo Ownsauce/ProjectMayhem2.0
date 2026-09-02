@@ -4,6 +4,8 @@ using System.Linq;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using AO.Assets.ResourceDatabase;
+using AO.Unity.Assets;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Controls;
@@ -50,6 +52,9 @@ namespace AO.Unity.AOStyle
         private PreferencesData _savedPreferences;
         private PreferencesData _workingPreferences;
         private bool _preferencesDirty;
+        private string _aoInstallPath = string.Empty;
+        private string _aoInstallStatus = string.Empty;
+        private bool _aoInstallValid;
 
         public bool HasUnsavedChanges => _hasUnsavedChanges || _preferencesDirty;
 
@@ -64,6 +69,10 @@ namespace AO.Unity.AOStyle
             _savedPreferences = LoadPreferences();
             _workingPreferences = ClonePreferences(_savedPreferences);
             _preferencesDirty = false;
+
+            AOInstallValidation configuredInstall = AOInstallConfiguration.GetConfiguredInstall();
+            _aoInstallPath = configuredInstall.IsValid ? configuredInstall.RootPath : string.Empty;
+            SetInstallStatus(configuredInstall);
 
             Build();
             RenderActiveTab();
@@ -140,6 +149,7 @@ namespace AO.Unity.AOStyle
             tabsLayout.childForceExpandHeight = true;
 
             AOStyleUiFactory.CreateButton("TabPreferences", tabs, "Preferences", _font, () => SetActiveTab("Preferences"), 130f);
+            AOStyleUiFactory.CreateButton("TabAOAssets", tabs, "AO Assets", _font, () => SetActiveTab("AO Assets"), 130f);
             AOStyleUiFactory.CreateButton("TabFixedKeys", tabs, "Fixed Keys", _font, () => SetActiveTab("Fixed Keys"), 130f);
             AOStyleUiFactory.CreateButton("TabKeyBindings", tabs, "Key Bindings", _font, () => SetActiveTab("Key Bindings"), 130f);
 
@@ -179,7 +189,114 @@ namespace AO.Unity.AOStyle
                 return;
             }
 
+            if (_activeTab == "AO Assets")
+            {
+                RenderAOAssetsTab();
+                return;
+            }
+
             RenderKeyBindings();
+        }
+
+        private void RenderAOAssetsTab()
+        {
+            var panel = AOStyleUiFactory.CreatePanel("AOAssetsPanel", _tabContentRoot,
+                new Color(0.09f, 0.14f, 0.2f, 0.95f));
+            panel.anchorMin = Vector2.zero;
+            panel.anchorMax = Vector2.one;
+            panel.offsetMin = Vector2.zero;
+            panel.offsetMax = Vector2.zero;
+
+            var title = AOStyleUiFactory.CreateText("Title", panel,
+                "Anarchy Online Installation", _font, 16, TextAnchor.UpperLeft);
+            var titleRt = (RectTransform)title.transform;
+            titleRt.anchorMin = new Vector2(0f, 1f);
+            titleRt.anchorMax = new Vector2(1f, 1f);
+            titleRt.offsetMin = new Vector2(12f, -32f);
+            titleRt.offsetMax = new Vector2(-12f, -8f);
+
+            var help = AOStyleUiFactory.CreateText("Help", panel,
+                "Enter the folder containing Anarchy.exe and the cd_image folder. "
+                + "Project Mayhem reads assets from your local installation and stores converted files in its private cache.",
+                _font, 13, TextAnchor.UpperLeft);
+            var helpRt = (RectTransform)help.transform;
+            helpRt.anchorMin = new Vector2(0f, 1f);
+            helpRt.anchorMax = new Vector2(1f, 1f);
+            helpRt.offsetMin = new Vector2(12f, -84f);
+            helpRt.offsetMax = new Vector2(-12f, -40f);
+            help.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+            var pathInput = AOStyleUiFactory.CreateInputField("AOInstallPath", panel,
+                "/path/to/Anarchy Online", _font, 600f);
+            var pathRt = (RectTransform)pathInput.transform;
+            pathRt.anchorMin = new Vector2(0f, 1f);
+            pathRt.anchorMax = new Vector2(1f, 1f);
+            pathRt.offsetMin = new Vector2(12f, -126f);
+            pathRt.offsetMax = new Vector2(-12f, -98f);
+            pathInput.text = _aoInstallPath;
+            pathInput.onValueChanged.AddListener(value => _aoInstallPath = value);
+
+            var validate = AOStyleUiFactory.CreateButton("ValidateInstall", panel,
+                "Validate and Save", _font, ValidateAndSaveInstall, 150f);
+            var validateRt = (RectTransform)validate.transform;
+            validateRt.anchorMin = new Vector2(0f, 1f);
+            validateRt.anchorMax = new Vector2(0f, 1f);
+            validateRt.pivot = new Vector2(0f, 1f);
+            validateRt.anchoredPosition = new Vector2(12f, -140f);
+            validateRt.sizeDelta = new Vector2(150f, 26f);
+
+            var clear = AOStyleUiFactory.CreateButton("ClearInstall", panel,
+                "Clear", _font, ClearInstall, 80f);
+            var clearRt = (RectTransform)clear.transform;
+            clearRt.anchorMin = new Vector2(0f, 1f);
+            clearRt.anchorMax = new Vector2(0f, 1f);
+            clearRt.pivot = new Vector2(0f, 1f);
+            clearRt.anchoredPosition = new Vector2(170f, -140f);
+            clearRt.sizeDelta = new Vector2(80f, 26f);
+
+            var status = AOStyleUiFactory.CreateText("InstallStatus", panel,
+                _aoInstallStatus, _font, 13, TextAnchor.UpperLeft);
+            var statusRt = (RectTransform)status.transform;
+            statusRt.anchorMin = new Vector2(0f, 1f);
+            statusRt.anchorMax = new Vector2(1f, 1f);
+            statusRt.offsetMin = new Vector2(12f, -230f);
+            statusRt.offsetMax = new Vector2(-12f, -176f);
+            status.color = _aoInstallValid
+                ? new Color(0.55f, 1f, 0.68f, 1f)
+                : new Color(1f, 0.65f, 0.5f, 1f);
+            status.horizontalOverflow = HorizontalWrapMode.Wrap;
+        }
+
+        private void ValidateAndSaveInstall()
+        {
+            AOInstallValidation validation = AOInstallConfiguration.SetInstallPath(_aoInstallPath);
+            if (validation.IsValid) _aoInstallPath = validation.RootPath;
+            SetInstallStatus(validation);
+            RenderActiveTab();
+        }
+
+        private void ClearInstall()
+        {
+            AOInstallConfiguration.ClearInstallPath();
+            _aoInstallPath = string.Empty;
+            _aoInstallValid = false;
+            _aoInstallStatus = "No AO installation is configured.";
+            RenderActiveTab();
+        }
+
+        private void SetInstallStatus(AOInstallValidation validation)
+        {
+            _aoInstallValid = validation != null && validation.IsValid;
+            if (_aoInstallValid)
+            {
+                _aoInstallStatus = "Valid AO installation — version "
+                    + validation.ClientVersion + "\n" + validation.ResourceDatabasePath;
+                return;
+            }
+
+            _aoInstallStatus = validation == null || validation.Errors == null
+                ? "No AO installation is configured."
+                : string.Join(" ", validation.Errors);
         }
 
         private void RenderPlaceholder(string title, string body)

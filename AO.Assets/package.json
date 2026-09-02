@@ -1,0 +1,6 @@
+{
+  "name": "com.projectmayhem.ao-assets",
+  "version": "2.0.0",
+  "displayName": "Project Mayhem AO.Assets",
+  "description": "Local AO installation validation, asset resolution, and converted-cache contracts."
+}

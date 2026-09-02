@@ -1184,7 +1184,19 @@ namespace AO.Server.Transport
                     MaxHealth = player.Profile.StatsContainer.GetFinalStat(MaxHealthStatId),
                     Nano = player.Profile.StatsContainer.GetFinalStat(CurrentNanoStatId),
                     MaxNano = player.Profile.StatsContainer.GetFinalStat(MaxNanoStatId),
-                    Experience = player.Profile.Level.Experience
+                    Experience = player.Profile.Level.Experience,
+                    AvailableIp = player.Profile.AvailableIp,
+                    BreedId = player.Profile.BreedId,
+                    ProfessionId = player.Profile.ProfessionId,
+                    Level = player.Profile.Level.Level,
+                    Sex = player.CharacterSexCode,
+                    Stats = player.Profile.StatsContainer.GetBaseStatsSnapshot()
+                        .Select(pair => new StatValueSnapshot
+                        {
+                            StatId = pair.Key,
+                            Value = pair.Value
+                        })
+                        .ToList()
                 });
             }
 

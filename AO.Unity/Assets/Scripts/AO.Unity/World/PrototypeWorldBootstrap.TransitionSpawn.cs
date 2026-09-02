@@ -10,7 +10,8 @@ namespace AO.Unity.World
             int pf,
             Transform characterTransform,
             Vector3? explicitAoDestination = null,
-            float? explicitYaw = null)
+            float? explicitYaw = null,
+            bool preferTeleportDefault = false)
         {
             if (pf <= 0 || characterTransform == null)
                 return false;
@@ -18,7 +19,7 @@ namespace AO.Unity.World
             BeginEnterWorldLoading();
 
             Vector3? resolvedAoDestination = explicitAoDestination;
-            if (!resolvedAoDestination.HasValue
+            if ((!resolvedAoDestination.HasValue || preferTeleportDefault)
                 && TryResolveTeleportDefaultForPlayfield(pf, out var defaultAo, out var defaultHeading, out _))
             {
                 resolvedAoDestination = defaultAo;
@@ -211,9 +212,81 @@ namespace AO.Unity.World
 
         private Vector3 ResolveExplicitSpawnPosition(Vector3 explicitWorldPosition)
         {
-            // Authoritative explicit/default spawn should be exact.
-            // Do not modify X/Y/Z here; server already resolved the AO target.
+            // Preserve the authoritative/default X/Z, but indoor AO defaults can use the
+            // dungeon's gameplay-space Y while extracted SurfaceResource geometry uses its
+            // materialized room-space Y. Ground against the lowest walkable indoor surface
+            // at that exact X/Z so the character starts below the ceiling, not on the roof.
+            if (_activePlayfieldUsesIndoorRoomSurfaces
+                && TryFindLowestIndoorSurfaceAtExactXZ(
+                    explicitWorldPosition, out Vector3 indoorGrounded))
+            {
+                return indoorGrounded;
+            }
             return explicitWorldPosition;
+        }
+
+        public bool EnsureCharacterOnPlayfieldSurface(Transform characterTransform)
+        {
+            if (characterTransform == null || _activePlayfieldRoot == null)
+                return false;
+
+            Vector3 requested = characterTransform.position;
+            bool foundExact = _activePlayfieldUsesIndoorRoomSurfaces
+                ? TryFindLowestIndoorSurfaceAtExactXZ(requested, out Vector3 grounded)
+                : TryFindSurfaceAtExactXZ(requested, out grounded);
+            if (!foundExact
+                && !TryFindSurfaceNear(requested, out grounded))
+            {
+                return false;
+            }
+
+            TeleportCharacterTransform(characterTransform, grounded);
+            return true;
+        }
+
+        private bool TryFindLowestIndoorSurfaceAtExactXZ(
+            Vector3 worldPoint,
+            out Vector3 groundedPoint)
+        {
+            groundedPoint = worldPoint;
+            float probeHeight = Mathf.Max(200f, safeSpawnProbeHeight);
+            Vector3 origin = new Vector3(worldPoint.x, worldPoint.y + probeHeight, worldPoint.z);
+            var hits = Physics.RaycastAll(
+                origin,
+                Vector3.down,
+                probeHeight * 4f,
+                ~0,
+                QueryTriggerInteraction.Ignore);
+            if (hits == null || hits.Length == 0)
+                return false;
+
+            bool found = false;
+            float lowestY = float.MaxValue;
+            for (int index = 0; index < hits.Length; index++)
+            {
+                RaycastHit hit = hits[index];
+                if (hit.collider == null || hit.transform == null)
+                    continue;
+                if (!_activePlayfieldRoot.IsChildOf(hit.transform)
+                    && !hit.transform.IsChildOf(_activePlayfieldRoot))
+                {
+                    continue;
+                }
+                if (hit.normal.y < 0.35f || hit.point.y >= lowestY)
+                    continue;
+
+                lowestY = hit.point.y;
+                found = true;
+            }
+
+            if (!found)
+                return false;
+
+            groundedPoint = new Vector3(
+                worldPoint.x,
+                lowestY + Mathf.Max(0.5f, safeSpawnHeightOffset),
+                worldPoint.z);
+            return true;
         }
 
         private bool TryFindSurfaceAtExactXZ(Vector3 worldPoint, out Vector3 groundedPoint)

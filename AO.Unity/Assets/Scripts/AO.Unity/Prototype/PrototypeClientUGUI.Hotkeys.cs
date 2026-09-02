@@ -36,6 +36,9 @@ namespace AO.Unity.Prototype
             if (textInputFocused)
                 return;
 
+            // Editor-friendly fallback: F10 may be consumed by Unity's menu bar.
+            if (kb.f9Key.wasPressedThisFrame) { ToggleF10WindowWithUnsavedCheck(); return; }
+
             if (IsActionPressedInputSystem("toggle_f10", kb)) { ToggleF10WindowWithUnsavedCheck(); return; }
             if (IsActionPressedInputSystem("toggle_item_browser", kb)) ToggleWindow(_itemBrowserWindow);
             if (IsActionPressedInputSystem("toggle_inventory", kb)) ToggleWindow(_inventoryWindow);
@@ -47,7 +50,7 @@ namespace AO.Unity.Prototype
             if (IsActionPressedInputSystem("skills_window", kb)) ToggleSkillsWindow();
             if (IsActionPressedInputSystem("quest_editor_window", kb)) ToggleWindow(_questEditorWindow);
             if (IsActionPressedInputSystem("teleport_window", kb)) ToggleWindow(_teleportWindow);
-            if (IsActionPressedInputSystem("status_window", kb)) ToggleWindow(_statusWindow);
+            if (IsActionPressedInputSystem("status_window", kb)) ToggleWindow(_chatWindow);
             if (IsActionPressedInputSystem("character_settings_window", kb)) ToggleWindow(_characterSettingsWindow);
 
             if (IsActionPressedInputSystem("actions_window", kb)) PublishStatusStub("Actions Window", "stub");
@@ -115,6 +118,9 @@ namespace AO.Unity.Prototype
             if (textInputFocused)
                 return;
 
+            // Editor-friendly fallback: F10 may be consumed by Unity's menu bar.
+            if (Input.GetKeyDown(KeyCode.F9)) { ToggleF10WindowWithUnsavedCheck(); return; }
+
             if (IsActionPressedLegacy("toggle_f10")) { ToggleF10WindowWithUnsavedCheck(); return; }
             if (IsActionPressedLegacy("toggle_item_browser")) ToggleWindow(_itemBrowserWindow);
             if (IsActionPressedLegacy("toggle_inventory")) ToggleWindow(_inventoryWindow);
@@ -126,7 +132,7 @@ namespace AO.Unity.Prototype
             if (IsActionPressedLegacy("skills_window")) ToggleSkillsWindow();
             if (IsActionPressedLegacy("quest_editor_window")) ToggleWindow(_questEditorWindow);
             if (IsActionPressedLegacy("teleport_window")) ToggleWindow(_teleportWindow);
-            if (IsActionPressedLegacy("status_window")) ToggleWindow(_statusWindow);
+            if (IsActionPressedLegacy("status_window")) ToggleWindow(_chatWindow);
             if (IsActionPressedLegacy("character_settings_window")) ToggleWindow(_characterSettingsWindow);
 
             if (IsActionPressedLegacy("actions_window")) PublishStatusStub("Actions Window", "stub");

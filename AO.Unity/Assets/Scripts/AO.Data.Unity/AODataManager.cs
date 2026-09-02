@@ -243,10 +243,28 @@ namespace AO.Data.Unity
 
         private void LoadStatMap()
         {
+            // Stat IDs are part of the client domain model. Seed them from the
+            // compiled catalog so runtime stat storage and requirement checks do
+            // not depend on a migrated statmap.json export.
+            StatMap = new DataCore.StatRegistry();
+            _statIdByName.Clear();
+            foreach (var field in typeof(StatIds).GetFields(
+                System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.Static))
+            {
+                if (field.FieldType != typeof(StatId)
+                    || !(field.GetValue(null) is StatId statId))
+                    continue;
+
+                string name = field.Name;
+                StatMap.Register(statId.Value, name);
+                _statIdByName[NormalizeStatName(name)] = statId.Value;
+            }
+
             string path = Path.Combine(Application.streamingAssetsPath, "AOData/statmap.json");
             if (!File.Exists(path))
             {
-                Debug.LogWarning("statmap.json missing");
+                Debug.Log("statmap.json missing; using the built-in AO stat catalog.");
                 return;
             }
 
@@ -687,19 +705,23 @@ namespace AO.Data.Unity
 
         private void LoadItems()
         {
-            string path = Path.Combine(Application.streamingAssetsPath, "AOData/items.json");
-            if (!File.Exists(path)) { Debug.LogError("items.json missing"); return; }
-
-            string json = File.ReadAllText(path);
-            Items = JsonConvert.DeserializeObject<List<DataCore.Item>>(json);
-            if (Items == null) Items = new List<DataCore.Item>();
+            // Server-owned items are registered lazily from ItemObject records in
+            // the configured AO ResourceDatabase. Avoid parsing the old 400+ MB
+            // export on startup; it was both slow and easy to mismatch with the
+            // selected server/client version.
+            Items = new List<DataCore.Item>();
+            _coreDefs.Clear();
+            _coreInstances.Clear();
+            _dataInstances.Clear();
             _rawItemsByAoid.Clear();
             _itemTextureApplicationsByAoid.Clear();
+            Debug.Log("Item definitions will be resolved lazily from the configured AO ResourceDatabase.");
+        }
 
-            foreach (var item in Items)
-            {
-                if (item == null)
-                    continue;
+        public void RegisterRuntimeItem(DataCore.Item item, params int[] aliases)
+        {
+            if (item == null || item.AOID <= 0)
+                return;
 
                 var derivedMods = BuildModifiers(item);
                 int itemClass = GetModifierValue(derivedMods, ItemClassStatId);
@@ -747,6 +769,49 @@ namespace AO.Data.Unity
                 _dataInstances[item.AOID] = dataInst;
                 _rawItemsByAoid[item.AOID] = item;
                 _itemTextureApplicationsByAoid[item.AOID] = BuildTextureApplications(item);
+                if (Items != null && !Items.Any(existing => existing?.AOID == item.AOID))
+                    Items.Add(item);
+
+                if (aliases == null)
+                    return;
+                foreach (int alias in aliases)
+                {
+                    if (alias <= 0 || alias == item.AOID)
+                        continue;
+                    _coreDefs[alias] = def;
+                    _coreInstances[alias] = inst;
+                    _dataInstances[alias] = dataInst;
+                    _rawItemsByAoid[alias] = item;
+                    _itemTextureApplicationsByAoid[alias] = _itemTextureApplicationsByAoid[item.AOID];
+                }
+        }
+
+        public void RegisterRuntimeInstance(
+            CoreItems.ItemDefinition definition,
+            long instanceId,
+            int quantity = 1,
+            int containerCapacity = 0)
+        {
+            if (definition == null || instanceId <= 0)
+                return;
+
+            quantity = Math.Max(1, quantity);
+            _coreInstances[instanceId] = new CoreItems.ItemInstance(
+                definition, quantity, instanceId, Math.Max(0, containerCapacity));
+
+            if (_dataInstances.TryGetValue(definition.AOID, out var template) && template?.Definition != null)
+            {
+                _dataInstances[instanceId] = new DataCore.ItemInstance
+                {
+                    // AO.Data.Core retains a 32-bit identity field, while locally
+                    // synthesized runtime identities may use the wider Core key.
+                    InstanceId = instanceId >= int.MinValue && instanceId <= int.MaxValue
+                        ? (int)instanceId
+                        : definition.AOID,
+                    DefinitionId = definition.AOID,
+                    Definition = template.Definition,
+                    Quantity = quantity
+                };
             }
         }
 
@@ -821,7 +886,9 @@ namespace AO.Data.Unity
         private static bool IsBackpack(string itemName)
         {
             if (string.IsNullOrWhiteSpace(itemName)) return false;
-            return itemName.ToLowerInvariant().Contains("backpack");
+            string normalized = itemName.Trim().ToLowerInvariant();
+            return normalized.Contains("backpack")
+                || normalized.Contains("survival pack");
         }
 
         private static List<DataCore.StatModifier> BuildModifiers(DataCore.Item item)
@@ -1213,6 +1280,23 @@ namespace AO.Data.Unity
             _weaponSlotBits = LoadSlotBitMap(Path.Combine(basePath, "weapon_slots.json"));
             _armorSlotBits = LoadSlotBitMap(Path.Combine(basePath, "armor_slots.json"));
             _implantSlotBits = LoadSlotBitMap(Path.Combine(basePath, "implant_slots.json"));
+
+            // Slot identities are protocol structure, not AO-derived display data.
+            // Keep the wear system functional when migration lookup files are absent.
+            if (_weaponSlotBits.Count == 0)
+                _weaponSlotBits = CreateCanonicalSlotBitMap(15);
+            if (_armorSlotBits.Count == 0)
+                _armorSlotBits = CreateCanonicalSlotBitMap(15);
+            if (_implantSlotBits.Count == 0)
+                _implantSlotBits = CreateCanonicalSlotBitMap(13);
+        }
+
+        private static Dictionary<ulong, List<int>> CreateCanonicalSlotBitMap(int slotCount)
+        {
+            var result = new Dictionary<ulong, List<int>>();
+            for (int slotId = 1; slotId <= slotCount; slotId++)
+                result[1UL << slotId] = new List<int> { slotId };
+            return result;
         }
 
         private static Dictionary<ulong, List<int>> LoadSlotBitMap(string path)
@@ -1336,6 +1420,19 @@ namespace AO.Data.Unity
         public DataCore.Item GetRawNanoByAoid(int aoid) =>
             _nanosByAoid.TryGetValue(aoid, out var nano) ? nano : null;
 
+        public void RegisterRuntimeNano(DataCore.Item nano)
+        {
+            if (nano == null || nano.AOID <= 0)
+                return;
+            _nanosByAoid[nano.AOID] = nano;
+            NanoItems ??= new List<DataCore.Item>();
+            int index = NanoItems.FindIndex(existing => existing?.AOID == nano.AOID);
+            if (index >= 0)
+                NanoItems[index] = nano;
+            else
+                NanoItems.Add(nano);
+        }
+
         public IReadOnlyList<ItemTextureApplication> GetItemTextureApplications(int aoid) =>
             _itemTextureApplicationsByAoid.TryGetValue(aoid, out var list) ? list : Array.Empty<ItemTextureApplication>();
 
@@ -1351,6 +1448,11 @@ namespace AO.Data.Unity
                 foreach (var statId in byStat.Keys)
                     result.Add(statId);
             }
+
+            // Canonical AO player skills. Skill-cost files refine color/IP costs,
+            // but their absence must not remove the skills from the runtime model.
+            for (int statId = 100; statId <= 168; statId++)
+                result.Add(statId);
 
             return result.OrderBy(v => v).ToArray();
         }

@@ -1,6 +1,11 @@
 using AO.Core.Characters;
 using AO.Core.Stats;
 using AO.Data.Unity;
+using AO.Assets.Decoders;
+using AO.Assets.Conversion;
+using AO.Assets.Navigation;
+using AO.Assets.ResourceDatabase;
+using AO.Unity.Assets;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -155,7 +160,6 @@ namespace AO.Unity.World
         [SerializeField] private int runtimeObjectBackgroundSpawnBatch = 32;
         [SerializeField] private float runtimeObjectStreamingRadius = 130f;
         [SerializeField] private float runtimeObjectStreamingMaxDeferSeconds = 20f;
-        [SerializeField] private bool showRuntimeStreamingDebugHud = true;
         [SerializeField] private int runtimeObjectImmediateSpawnSeedCount = 4;
         [SerializeField] private float runtimeObjectSpawnFrameBudgetMs = 2.0f;
         [SerializeField] private bool loadRuntimeObjectVisualsFromGlbFallback = true;
@@ -299,6 +303,7 @@ namespace AO.Unity.World
         private Coroutine _playfieldLoadingOverlayLogoSweepCoroutine;
         private Coroutine _playfieldLoadingOverlayHideCoroutine;
         private float _playfieldLoadingOverlayShownAt = -1f;
+        private bool _externalWorldEntryLoadingHold;
         private Coroutine _launchLogoRoutine;
         private float _timeScaleBeforeLaunchLogo = 1f;
         private CollisionOverrideSet _collisionOverrides = CreateDefaultCollisionOverrideSet();
@@ -1546,7 +1551,7 @@ namespace AO.Unity.World
                 mr.enabled = false;
         }
 
-        private static async Task<bool> TryInstantiateGlbWithReflection(
+        internal static async Task<bool> TryInstantiateGlbWithReflection(
             string fullPath,
             Transform parent,
             Action<object> onImporterLoaded = null,
@@ -1826,7 +1831,7 @@ namespace AO.Unity.World
             return settings;
         }
 
-        private static void DisposeImporter(object importer)
+        internal static void DisposeImporter(object importer)
         {
             if (importer == null)
                 return;
@@ -2088,6 +2093,9 @@ namespace AO.Unity.World
             if (IsPlayfieldGlbStrictMode(pf))
                 return false;
 
+            if (TryStartDirectOutdoorPlayfieldLoad(pf, out centerWorld))
+                return true;
+
             PlayfieldData parsed;
             string file = Path.Combine(Application.streamingAssetsPath, playfieldsSubfolder, $"{pf}.json");
             if (TryLoadPlayfieldObjectsFromPackageFolder(pf, out var packageParsed, out var packageMeshMap))
@@ -2112,6 +2120,8 @@ namespace AO.Unity.World
                 _packageStatelMeshMapByPlayfield.Remove(pf);
                 if (!File.Exists(file))
                 {
+                    if (TryLoadIndoorRoomFootprintsFromAOInstall(pf, out centerWorld))
+                        return true;
                     Debug.LogWarning($"Playfield JSON not found: {file}");
                     return false;
                 }
@@ -2634,6 +2644,190 @@ namespace AO.Unity.World
             return built > 0;
         }
 
+        private bool TryLoadIndoorRoomSurfacesFromAOInstall(
+            int pf,
+            AOInstallValidation install,
+            AOPlayfieldDefinition definition,
+            Transform parent,
+            Vector3 horizontalCenter,
+            bool centerAroundOrigin,
+            float positionScale)
+        {
+            if (install == null || !install.IsValid || definition == null)
+                return false;
+
+            string cacheFolder = Path.Combine(
+                AOInstallConfiguration.CacheRoot,
+                "IndoorSurfaces",
+                SanitizeRoomName(install.DatabaseFingerprint));
+            string streamPath = Path.Combine(cacheFolder, $"{pf}_v2.aois");
+            if (!File.Exists(streamPath))
+            {
+                string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
+                string helperPath = Path.Combine(
+                    projectRoot, "tools", "AOIndoorExtractor", "AOIndoorExtractor.exe");
+                if (!AOIndoorSurfaceExtractor.Extract(
+                    install,
+                    pf,
+                    definition.TilemapId,
+                    definition.Rooms.Count,
+                    helperPath,
+                    streamPath,
+                    out string diagnostic))
+                {
+                    Debug.LogError($"Direct AO indoor extraction failed for PF {pf}: {diagnostic}");
+                    return false;
+                }
+                Debug.Log($"Direct AO indoor extraction completed for PF {pf}: {diagnostic}");
+            }
+
+            AOIndoorSurfaceSet extracted;
+            try
+            {
+                extracted = AOIndoorSurfaceStreamDecoder.Decode(streamPath, pf);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError($"Direct AO indoor stream decode failed for PF {pf}: {exception.Message}");
+                return false;
+            }
+
+            var surfacesFile = new PlayfieldRoomSurfacesFile
+            {
+                PlayfieldId = pf,
+                PlayfieldName = definition.Name
+            };
+            for (int roomIndex = 0; roomIndex < extracted.Rooms.Count; roomIndex++)
+            {
+                AOIndoorSurfaceRoom sourceRoom = extracted.Rooms[roomIndex];
+                string roomName = sourceRoom.Instance >= 0
+                    && sourceRoom.Instance < definition.Rooms.Count
+                    ? definition.Rooms[sourceRoom.Instance].Name
+                    : $"Room {sourceRoom.Instance}";
+                var room = new RoomSurfaceRoomData
+                {
+                    Instance = sourceRoom.Instance,
+                    Name = roomName
+                };
+                if (sourceRoom.Instance >= 0 && sourceRoom.Instance < definition.Rooms.Count)
+                {
+                    AOIndoorSurfaceMesh terrain = AOIndoorDungeonTerrainBuilder.Build(
+                        definition.Rooms[sourceRoom.Instance], extracted.Tilemap);
+                    if (terrain != null)
+                        room.SurfaceMeshes.Add(ConvertDirectIndoorMesh(terrain));
+                }
+                for (int meshIndex = 0; meshIndex < sourceRoom.Meshes.Count; meshIndex++)
+                {
+                    AOIndoorSurfaceMesh sourceMesh = sourceRoom.Meshes[meshIndex];
+                    room.SurfaceMeshes.Add(ConvertDirectIndoorMesh(sourceMesh));
+                }
+                surfacesFile.Rooms.Add(room);
+            }
+
+            bool built = BuildIndoorRoomSurfaces(
+                pf, parent, horizontalCenter, centerAroundOrigin, positionScale, surfacesFile,
+                addIndoorRoomSurfaceColliders,
+                horizontalOnlyColliders: true);
+            if (built)
+            {
+                int navigationRooms = addIndoorRoomSurfaceColliders
+                    ? BuildDirectIndoorSharpNavColliders(extracted, parent, horizontalCenter,
+                        centerAroundOrigin, positionScale, definition)
+                    : 0;
+                Debug.Log($"Loaded directly extracted AO indoor surfaces for PF {pf}: "
+                    + $"rooms={extracted.Rooms.Count}, sharpNavRooms={navigationRooms}, source={streamPath}.");
+            }
+            return built;
+        }
+
+        private static RoomSurfaceMeshData ConvertDirectIndoorMesh(AOIndoorSurfaceMesh sourceMesh)
+        {
+            var mesh = new RoomSurfaceMeshData
+            {
+                VertexCount = sourceMesh.VertexCount,
+                TriangleIndexCount = sourceMesh.Triangles.Length,
+                Position = new Vector3Data(),
+                Rotation = new QuaternionData { W = 1f },
+                Scale = new Vector3Data { X = 1f, Y = 1f, Z = 1f },
+                Triangles = new List<int>(sourceMesh.Triangles)
+            };
+            for (int vertex = 0; vertex < sourceMesh.Vertices.Length; vertex += 3)
+            {
+                mesh.Vertices.Add(new Vector3Data
+                {
+                    X = sourceMesh.Vertices[vertex],
+                    Y = sourceMesh.Vertices[vertex + 1],
+                    Z = sourceMesh.Vertices[vertex + 2]
+                });
+            }
+            return mesh;
+        }
+
+        private static int BuildDirectIndoorSharpNavColliders(
+            AOIndoorSurfaceSet surfaces,
+            Transform parent,
+            Vector3 horizontalCenter,
+            bool centerAroundOrigin,
+            float positionScale,
+            AOPlayfieldDefinition definition)
+        {
+            var root = new GameObject($"PF_{surfaces.PlayfieldId}_SharpNav");
+            root.transform.SetParent(parent, false);
+            int built = 0;
+            var settings = SharpNav.NavMeshGenerationSettings.CustomDensity(0.3f, 0.5f);
+            foreach (AOIndoorSurfaceRoom room in surfaces.Rooms)
+            {
+                try
+                {
+                    AOIndoorSurfaceMesh terrain = room.Instance >= 0
+                        && room.Instance < definition.Rooms.Count
+                        ? AOIndoorDungeonTerrainBuilder.Build(
+                            definition.Rooms[room.Instance], surfaces.Tilemap)
+                        : null;
+                    AOIndoorNavigationMesh navigation = AOIndoorSharpNavBuilder.Build(
+                        room, settings, terrain);
+                    if (navigation.TriangleCount == 0)
+                        continue;
+
+                    var vertices = new Vector3[navigation.VertexCount];
+                    for (int index = 0; index < vertices.Length; index++)
+                    {
+                        int offset = index * 3;
+                        Vector3 point = new Vector3(
+                            navigation.Vertices[offset],
+                            navigation.Vertices[offset + 1],
+                            navigation.Vertices[offset + 2]);
+                        if (centerAroundOrigin)
+                            point -= horizontalCenter;
+                        vertices[index] = point * positionScale;
+                    }
+
+                    var mesh = new Mesh
+                    {
+                        name = $"PF_{surfaces.PlayfieldId}_Room_{room.Instance}_SharpNav",
+                        indexFormat = vertices.Length > 65535
+                            ? UnityEngine.Rendering.IndexFormat.UInt32
+                            : UnityEngine.Rendering.IndexFormat.UInt16
+                    };
+                    mesh.vertices = vertices;
+                    mesh.triangles = navigation.Triangles;
+                    mesh.RecalculateBounds();
+                    var roomObject = new GameObject(mesh.name);
+                    roomObject.transform.SetParent(root.transform, false);
+                    roomObject.AddComponent<MeshCollider>().sharedMesh = mesh;
+                    built++;
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning($"SharpNav bake skipped PF {surfaces.PlayfieldId} room "
+                        + $"{room.Instance}: {exception.Message}");
+                }
+            }
+            if (built == 0)
+                Destroy(root);
+            return built;
+        }
+
         private bool TryLoadIndoorRoomSurfacesJson(
             int pf,
             Transform parent,
@@ -2663,6 +2857,23 @@ namespace AO.Unity.World
             if (surfacesFile?.Rooms == null || surfacesFile.Rooms.Count == 0)
                 return false;
 
+            return BuildIndoorRoomSurfaces(
+                pf, parent, horizontalCenter, centerAroundOrigin, positionScale, surfacesFile);
+        }
+
+        private bool BuildIndoorRoomSurfaces(
+            int pf,
+            Transform parent,
+            Vector3 horizontalCenter,
+            bool centerAroundOrigin,
+            float positionScale,
+            PlayfieldRoomSurfacesFile surfacesFile,
+            bool? addCollidersOverride = null,
+            bool horizontalOnlyColliders = false)
+        {
+            if (surfacesFile?.Rooms == null || surfacesFile.Rooms.Count == 0)
+                return false;
+
             var surfacesRoot = new GameObject($"PF_{pf}_RoomSurfaces");
             surfacesRoot.transform.SetParent(parent, false);
             bool forceSimpleIndoorMaterials = useDistinctIndoorSurfaceColors || pf == 127;
@@ -2674,6 +2885,8 @@ namespace AO.Unity.World
                 ? BuildIndoorRoomSurfaceMaterial(indoorRoomCeilingColor, forceSimpleIndoorMaterials)
                 : roomMaterial;
             var pickDataByRoom = LoadIndoorRoomPickDataByRoom(pf);
+            var roomFootprintsByInstance = LoadIndoorRoomFootprintsByInstance(pf);
+            bool addSurfaceColliders = addCollidersOverride ?? addIndoorRoomSurfaceColliders;
 
             int builtRooms = 0;
             int builtSurfaces = 0;
@@ -2761,7 +2974,22 @@ namespace AO.Unity.World
                     }
                 }
 
-                // Intentionally no heuristic floor fill here while validating extractor-driven floor capture.
+                if (pf == 127
+                    && roomFootprintsByInstance != null
+                    && roomFootprintsByInstance.TryGetValue(room.Instance, out var footprint))
+                {
+                    AppendRoomFootprintFloorPatch(
+                        footprint,
+                        floorVertices,
+                        floorTriangles,
+                        wallVertices,
+                        horizontalCenter,
+                        centerAroundOrigin,
+                        positionScale);
+                }
+
+                // Captured surfaces remain authoritative; the footprint patch closes holes in
+                // rooms whose client surface list does not contain a walkable floor plane.
 
                 if (pickDataByRoom != null
                     && pickDataByRoom.TryGetValue(room.Instance, out var roomPickData)
@@ -2800,7 +3028,7 @@ namespace AO.Unity.World
                     floorVertices,
                     floorTriangles,
                     roomMaterial,
-                    addIndoorRoomSurfaceColliders);
+                    addSurfaceColliders);
                 builtParts += TryCreateIndoorRoomSurfacePart(
                     surfacesRoot.transform,
                     room,
@@ -2808,7 +3036,7 @@ namespace AO.Unity.World
                     wallVertices,
                     wallTriangles,
                     roomWallMaterial,
-                    addIndoorRoomSurfaceColliders);
+                    addSurfaceColliders && !horizontalOnlyColliders);
                 builtParts += TryCreateIndoorRoomSurfacePart(
                     surfacesRoot.transform,
                     room,
@@ -2816,7 +3044,7 @@ namespace AO.Unity.World
                     ceilingVertices,
                     ceilingTriangles,
                     roomCeilingMaterial,
-                    addIndoorRoomSurfaceColliders);
+                    addSurfaceColliders);
 
                 if (builtParts == 0)
                     continue;
@@ -3817,6 +4045,114 @@ namespace AO.Unity.World
                 return false;
 
             return true;
+        }
+
+        private bool TryLoadIndoorRoomFootprintsFromAOInstall(int pf,
+            out Vector3 centerWorld)
+        {
+            centerWorld = Vector3.zero;
+            AOInstallValidation install = AOInstallConfiguration.GetConfiguredInstall();
+            if (install == null || !install.IsValid)
+                return false;
+
+            AOPlayfieldDefinition definition;
+            try
+            {
+                using (var database = new AOResourceDatabase(install.RootPath))
+                {
+                    if (!database.TryReadRaw(AOResourceTypes.Playfield, pf, out byte[] raw))
+                        return false;
+                    definition = AOPlayfieldDefinitionDecoder.Decode(raw, pf);
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError($"Failed decoding AO playfield {pf}: {exception.Message}");
+                return false;
+            }
+
+            if (!definition.IsIndoor || definition.Rooms.Count == 0)
+                return false;
+
+            bool useCenteredCoordinates = UseCenteredPlayfieldCoordinates;
+            float positionScale = EffectivePlayfieldCoordinateScale;
+            Vector3 horizontalCenter = Vector3.zero;
+            for (int index = 0; index < definition.Rooms.Count; index++)
+            {
+                AOIndoorRoom room = definition.Rooms[index];
+                horizontalCenter += new Vector3(room.X + room.CenterX, 0f,
+                    room.Z + room.CenterZ);
+            }
+            horizontalCenter /= definition.Rooms.Count;
+
+            var root = new GameObject($"PF_{pf}_{definition.Name}_AOInstall");
+            root.transform.SetParent(_worldRoot, false);
+            var material = BuildIndoorRoomFloorMaterial();
+            bool loadedSurfaces = TryLoadIndoorRoomSurfacesFromAOInstall(
+                pf,
+                install,
+                definition,
+                root.transform,
+                horizontalCenter,
+                useCenteredCoordinates,
+                positionScale);
+            if (!loadedSurfaces && loadIndoorRoomSurfacesFromJson)
+            {
+                loadedSurfaces = TryLoadIndoorRoomSurfacesJson(
+                    pf,
+                    root.transform,
+                    horizontalCenter,
+                    useCenteredCoordinates,
+                    positionScale);
+            }
+            int built = 0;
+            for (int index = 0; index < definition.Rooms.Count; index++)
+            {
+                AOIndoorRoom room = definition.Rooms[index];
+                float widthAo = Mathf.Max(2f, (room.TileX2 - room.TileX1) * 2f);
+                float lengthAo = Mathf.Max(2f, (room.TileY2 - room.TileY1) * 2f);
+                Vector3 centerAo = new Vector3(room.X + room.CenterX, room.Y,
+                    room.Z + room.CenterZ);
+                Vector3 center = useCenteredCoordinates
+                    ? (centerAo - horizontalCenter) * positionScale
+                    : centerAo * positionScale;
+
+                if (!loadedSurfaces)
+                {
+                    var floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    floor.name = $"AOInstallRoom_{index}_{SanitizeRoomName(room.Name)}";
+                    floor.transform.SetParent(root.transform, false);
+                    floor.transform.position = center
+                        + Vector3.down * (indoorRoomFloorThickness * 0.5f);
+                    floor.transform.rotation = Quaternion.Euler(0f,
+                        room.RotationQuarterTurns * 90f, 0f);
+                    floor.transform.localScale = new Vector3(widthAo * positionScale,
+                        indoorRoomFloorThickness, lengthAo * positionScale);
+                    var renderer = floor.GetComponent<MeshRenderer>();
+                    if (renderer != null && material != null)
+                        renderer.sharedMaterial = material;
+                }
+                built++;
+            }
+
+            Transform placeholder = _worldRoot != null ? _worldRoot.Find("Ground") : null;
+            if (placeholder != null) placeholder.gameObject.SetActive(false);
+
+            _activePlayfieldRoot = root.transform;
+            _activePlayfieldId = pf;
+            _activeHorizontalCenter = horizontalCenter;
+            _activeUseCenteredCoordinates = useCenteredCoordinates;
+            _activeCoordinateScale = positionScale;
+            _activePlayfieldUsesIndoorRoomSurfaces = loadedSurfaces;
+            centerWorld = useCenteredCoordinates
+                ? Vector3.zero
+                : horizontalCenter * positionScale;
+            Debug.Log($"Loaded AO-install indoor layout for playfield {pf} "
+                + $"({definition.Name}): rooms={built}, tilemap={definition.TilemapId}. "
+                + (loadedSurfaces
+                    ? " Loaded recovered room surface meshes."
+                    : " Room surface meshes are unavailable; rendering AO-derived footprints."));
+            return built > 0;
         }
 
         private System.Collections.IEnumerator SpawnDeferredRuntimeWorldObjectsCoroutine(
@@ -5837,21 +6173,24 @@ namespace AO.Unity.World
             bool centerAroundOrigin,
             float positionScale)
         {
-            if (footprint == null || wallVertices == null || wallVertices.Count == 0)
+            if (footprint == null)
                 return;
 
             float minY = float.MaxValue;
-            for (int i = 0; i < wallVertices.Count; i++)
-                minY = Mathf.Min(minY, wallVertices[i].y);
-            if (!float.IsFinite(minY))
-                return;
+            if (wallVertices != null)
+            {
+                for (int i = 0; i < wallVertices.Count; i++)
+                    minY = Mathf.Min(minY, wallVertices[i].y);
+            }
 
             Vector3 center = centerAroundOrigin
                 ? (footprint.CenterAo - horizontalCenter) * positionScale
                 : footprint.CenterAo * positionScale;
             float halfWidth = Mathf.Max(0.1f, (footprint.WidthAo * positionScale) * 0.5f);
             float halfLength = Mathf.Max(0.1f, (footprint.LengthAo * positionScale) * 0.5f);
-            float y = minY + Mathf.Max(0.005f, IndoorRoomPickPatchHeightOffset * 0.5f);
+            float y = float.IsFinite(minY)
+                ? minY + Mathf.Max(0.005f, IndoorRoomPickPatchHeightOffset * 0.5f)
+                : center.y + Mathf.Max(0.005f, IndoorRoomPickPatchHeightOffset * 0.5f);
 
             Quaternion rot = Quaternion.Euler(0f, footprint.RotationQuarterTurns * 90f, 0f);
             Vector3 c0 = center + rot * new Vector3(-halfWidth, 0f, -halfLength);

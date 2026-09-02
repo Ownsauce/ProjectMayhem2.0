@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <!-- Unity imports this directory as a source package. SDK artifacts must
+         live outside it or Unity sees a duplicate AO.Client assembly. -->
+    <BaseOutputPath>../tmp/dotnet-build/AO.Client/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>../tmp/dotnet-build/AO.Client/obj/</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>../tmp/dotnet-build/AO.Client/obj/</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

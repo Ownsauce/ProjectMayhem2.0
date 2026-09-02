@@ -7,9 +7,15 @@ using System.Reflection;
 using System.Threading.Tasks;
 using AO.Core.Characters;
 using AO.Core.Stats;
+using AO.Client.Characters;
+using AO.Client.World;
 using AO.Unity.AOStyle;
+using AO.Unity.Assets;
 using AO.Unity.World;
+using AO.Assets.ResourceDatabase;
+using Newtonsoft.Json;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace AO.Unity.Prototype
 {
@@ -22,6 +28,10 @@ namespace AO.Unity.Prototype
             public Transform Transform;
             public TextMesh NameLabel;
             public Vector3 BaseScale = Vector3.one;
+            public Vector3 TargetLocalPosition;
+            public Quaternion TargetRotation = Quaternion.identity;
+            public Vector3 TargetLocalScale = Vector3.one;
+            public int VisualRevision;
         }
 
         private sealed class ProfessionPreviewActor
@@ -33,12 +43,62 @@ namespace AO.Unity.Prototype
             public bool Loaded;
         }
 
+        [Serializable]
+        private sealed class ServerCatalogFile
+        {
+            public List<ServerCatalogEntry> servers = new();
+        }
+
+        [Serializable]
+        private sealed class DimensionCatalogFile
+        {
+            public List<DimensionCatalogEntry> dimensions = new();
+        }
+
+        [Serializable]
+        private sealed class DimensionCatalogEntry
+        {
+            public string id = string.Empty;
+            public string name = string.Empty;
+            public string host = string.Empty;
+            public int port;
+            public string clientVersion = "18.8.62";
+            public string authentication = string.Empty;
+            public string seed1 = string.Empty;
+            public string seed2 = string.Empty;
+            public string privateKey = string.Empty;
+            public string publicKey = string.Empty;
+        }
+
+        [Serializable]
+        private sealed class ServerCatalogEntry
+        {
+            public string id = string.Empty;
+            public string displayName = string.Empty;
+            public string host = string.Empty;
+            public int port;
+            public string version = "18.8.62";
+            public string authentication = string.Empty;
+            public string loginPrime = string.Empty;
+            public string loginPublicSeed = string.Empty;
+        }
+
         private readonly CharacterPreviewSlot[] _characterCreatePreviewSlots = new CharacterPreviewSlot[3];
+        private readonly Dictionary<string, string> _defaultHeadByBreedSex = new(StringComparer.Ordinal);
+        private int _carouselSelectedIndex = -1;
         private readonly Dictionary<int, ProfessionPreviewActor> _professionPreviewActors = new();
         private readonly List<int> _professionPreviewOrder = new();
         private bool _professionStepActive;
         private bool _createFlowUiActive;
         private int _selectedProfessionPreviewId = -1;
+        private RectTransform _connectionSetupRoot;
+        private Dropdown _connectionServerDropdown;
+        private readonly List<ServerCatalogEntry> _connectionServers = new();
+        private InputField _connectionUsernameInput;
+        private InputField _connectionPasswordInput;
+        private InputField _connectionInstallInput;
+        private Text _connectionStatusText;
+        private Button _connectionContinueButton;
 
         private void BuildCharacterSelectionFlow(RectTransform body, RectTransform root, Font font)
         {
@@ -86,6 +146,489 @@ namespace AO.Unity.Prototype
             SetCharacterFlowActive(true);
             var bootstrap = FindFirstObjectByType<PrototypeWorldBootstrap>();
             bootstrap?.MarkCharacterFlowReady();
+            _gameServerSession = GetComponent<AOGameServerSession>();
+            if (_gameServerSession == null)
+                _gameServerSession = gameObject.AddComponent<AOGameServerSession>();
+            _gameServerSession.InventoryChanged -= HandleServerInventoryChanged;
+            _gameServerSession.InventoryChanged += HandleServerInventoryChanged;
+            _gameServerSession.CharacterStateChanged -= HandleServerCharacterStateChanged;
+            _gameServerSession.CharacterStateChanged += HandleServerCharacterStateChanged;
+            _characterSelectionRoot.gameObject.SetActive(false);
+            BuildConnectionSetup(overlayParent, font);
+        }
+
+        private void HandleServerInventoryChanged(InventorySnapshot snapshot)
+        {
+            _context?.ApplyServerInventory(snapshot);
+        }
+
+        private void HandleServerCharacterStateChanged(CharacterStateSnapshot snapshot)
+        {
+            _context?.ApplyServerCharacterState(snapshot);
+        }
+
+        private void BuildConnectionSetup(RectTransform parent, Font font)
+        {
+            _connectionSetupRoot = AOStyleUiFactory.CreatePanel(
+                "ConnectionSetupOverlay", parent, new Color(0.005f, 0.015f, 0.03f, 1f));
+            _connectionSetupRoot.anchorMin = Vector2.zero;
+            _connectionSetupRoot.anchorMax = Vector2.one;
+            _connectionSetupRoot.offsetMin = Vector2.zero;
+            _connectionSetupRoot.offsetMax = Vector2.zero;
+            _connectionSetupRoot.SetAsLastSibling();
+
+            RectTransform panel = AOStyleUiFactory.CreatePanel(
+                "ConnectionSetupPanel", _connectionSetupRoot, new Color(0.06f, 0.1f, 0.15f, 0.98f));
+            panel.anchorMin = panel.anchorMax = new Vector2(0.5f, 0.5f);
+            panel.pivot = new Vector2(0.5f, 0.5f);
+            panel.sizeDelta = new Vector2(620f, 520f);
+
+            Text title = AOStyleUiFactory.CreateText("Title", panel,
+                "PROJECT MAYHEM", font, 28, TextAnchor.MiddleCenter);
+            PlaceSetupControl(title.rectTransform, 32f, 52f);
+            title.color = new Color(0.65f, 0.9f, 1f, 1f);
+
+            Text subtitle = AOStyleUiFactory.CreateText("Subtitle", panel,
+                "Connection Setup", font, 17, TextAnchor.MiddleCenter);
+            PlaceSetupControl(subtitle.rectTransform, 84f, 30f);
+
+            CreateServerDropdown(panel, font, 130f);
+            _connectionUsernameInput = CreateSetupInput(panel, font, "Username",
+                "AO account username", string.Empty, 196f);
+            _connectionPasswordInput = CreateSetupInput(panel, font, "Password",
+                "AO account password", string.Empty, 262f);
+            _connectionPasswordInput.contentType = InputField.ContentType.Password;
+            _connectionPasswordInput.ForceLabelUpdate();
+
+            AOInstallValidation configured = AOInstallConfiguration.GetConfiguredInstall();
+            _connectionInstallInput = CreateSetupInput(panel, font, "Anarchy Online installation",
+                "Folder containing Anarchy.exe and cd_image",
+                configured != null && configured.IsValid ? configured.RootPath : string.Empty, 328f);
+
+            Button detect = AOStyleUiFactory.CreateButton("DetectInstall", panel,
+                "Detect", font, DetectAoInstallForSetup, 92f);
+            RectTransform detectRt = (RectTransform)detect.transform;
+            detectRt.anchorMin = detectRt.anchorMax = new Vector2(1f, 1f);
+            detectRt.pivot = new Vector2(1f, 1f);
+            detectRt.anchoredPosition = new Vector2(-34f, -373f);
+            detectRt.sizeDelta = new Vector2(92f, 28f);
+
+#if UNITY_EDITOR
+            Button browse = AOStyleUiFactory.CreateButton("BrowseInstall", panel,
+                "Browse...", font, BrowseAoInstallForSetup, 92f);
+            RectTransform browseRt = (RectTransform)browse.transform;
+            browseRt.anchorMin = browseRt.anchorMax = new Vector2(1f, 1f);
+            browseRt.pivot = new Vector2(1f, 1f);
+            browseRt.anchoredPosition = new Vector2(-134f, -373f);
+            browseRt.sizeDelta = new Vector2(92f, 28f);
+#endif
+
+            _connectionStatusText = AOStyleUiFactory.CreateText("ConnectionStatus", panel,
+                "Choose the server and local AO installation, then sign in.",
+                font, 13, TextAnchor.MiddleLeft);
+            PlaceSetupControl(_connectionStatusText.rectTransform, 410f, 38f);
+            _connectionStatusText.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+            _connectionContinueButton = AOStyleUiFactory.CreateButton("Continue", panel,
+                "CONNECT", font, SubmitConnectionSetup, 180f);
+            RectTransform continueRt = (RectTransform)_connectionContinueButton.transform;
+            continueRt.anchorMin = continueRt.anchorMax = new Vector2(0.5f, 1f);
+            continueRt.pivot = new Vector2(0.5f, 1f);
+            continueRt.anchoredPosition = new Vector2(0f, -466f);
+            continueRt.sizeDelta = new Vector2(180f, 36f);
+
+            ConfigureConnectionSetupNavigation();
+        }
+
+        private void ConfigureConnectionSetupNavigation()
+        {
+            ConfigureExplicitNavigation(_connectionServerDropdown,
+                _connectionContinueButton, _connectionUsernameInput);
+            ConfigureExplicitNavigation(_connectionUsernameInput,
+                _connectionServerDropdown, _connectionPasswordInput);
+            ConfigureExplicitNavigation(_connectionPasswordInput,
+                _connectionUsernameInput, _connectionInstallInput);
+            ConfigureExplicitNavigation(_connectionInstallInput,
+                _connectionPasswordInput, _connectionContinueButton);
+            ConfigureExplicitNavigation(_connectionContinueButton,
+                _connectionInstallInput, _connectionServerDropdown);
+        }
+
+        private static void ConfigureExplicitNavigation(
+            Selectable selectable, Selectable previous, Selectable next)
+        {
+            if (selectable == null)
+                return;
+            Navigation navigation = selectable.navigation;
+            navigation.mode = Navigation.Mode.Explicit;
+            navigation.selectOnUp = previous;
+            navigation.selectOnLeft = previous;
+            navigation.selectOnDown = next;
+            navigation.selectOnRight = next;
+            selectable.navigation = navigation;
+        }
+
+        private void HandleConnectionSetupTabNavigation()
+        {
+            if (_connectionSetupRoot == null || !_connectionSetupRoot.gameObject.activeInHierarchy)
+                return;
+
+#if ENABLE_INPUT_SYSTEM
+            var keyboard = UnityEngine.InputSystem.Keyboard.current;
+            if (keyboard == null || !keyboard.tabKey.wasPressedThisFrame)
+                return;
+            bool backwards = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
+#else
+            if (!Input.GetKeyDown(KeyCode.Tab))
+                return;
+            bool backwards = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+#endif
+
+            Selectable[] order =
+            {
+                _connectionServerDropdown,
+                _connectionUsernameInput,
+                _connectionPasswordInput,
+                _connectionInstallInput,
+                _connectionContinueButton
+            };
+            GameObject selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
+            InputField selectedInput = order.OfType<InputField>()
+                .FirstOrDefault(input => input != null && input.gameObject == selected);
+            if (selectedInput != null && selectedInput.text.IndexOf('\t') >= 0)
+                selectedInput.text = selectedInput.text.Replace("\t", string.Empty);
+            int index = Array.FindIndex(order, item => item != null && item.gameObject == selected);
+            index = index < 0 ? (backwards ? order.Length : -1) : index;
+            for (int attempts = 0; attempts < order.Length; attempts++)
+            {
+                index = (index + (backwards ? -1 : 1) + order.Length) % order.Length;
+                Selectable next = order[index];
+                if (next == null || !next.IsInteractable())
+                    continue;
+                next.Select();
+                if (next is InputField input)
+                    input.ActivateInputField();
+                break;
+            }
+        }
+
+        private static InputField CreateSetupInput(RectTransform panel, Font font,
+            string label, string placeholder, string value, float top)
+        {
+            Text labelText = AOStyleUiFactory.CreateText(label + "Label", panel,
+                label, font, 13, TextAnchor.MiddleLeft);
+            PlaceSetupControl(labelText.rectTransform, top, 20f);
+            InputField input = AOStyleUiFactory.CreateInputField(label + "Input", panel,
+                placeholder, font, 540f);
+            RectTransform inputRt = (RectTransform)input.transform;
+            inputRt.anchorMin = inputRt.anchorMax = new Vector2(0.5f, 1f);
+            inputRt.pivot = new Vector2(0.5f, 1f);
+            inputRt.anchoredPosition = new Vector2(0f, -(top + 22f));
+            inputRt.sizeDelta = new Vector2(540f, 30f);
+            input.text = value ?? string.Empty;
+            return input;
+        }
+
+        private void CreateServerDropdown(RectTransform panel, Font font, float top)
+        {
+            Text label = AOStyleUiFactory.CreateText("ServerLabel", panel,
+                "Server", font, 13, TextAnchor.MiddleLeft);
+            PlaceSetupControl(label.rectTransform, top, 20f);
+
+            GameObject dropdownObject = DefaultControls.CreateDropdown(new DefaultControls.Resources());
+            dropdownObject.name = "ServerDropdown";
+            dropdownObject.transform.SetParent(panel, false);
+            _connectionServerDropdown = dropdownObject.GetComponent<Dropdown>();
+            RectTransform dropdownRt = (RectTransform)dropdownObject.transform;
+            dropdownRt.anchorMin = dropdownRt.anchorMax = new Vector2(0.5f, 1f);
+            dropdownRt.pivot = new Vector2(0.5f, 1f);
+            dropdownRt.anchoredPosition = new Vector2(0f, -(top + 22f));
+            dropdownRt.sizeDelta = new Vector2(540f, 30f);
+            foreach (Text text in dropdownObject.GetComponentsInChildren<Text>(true))
+            {
+                text.font = font;
+                text.fontSize = 13;
+            }
+
+            LoadServerCatalog();
+            _connectionServerDropdown.ClearOptions();
+            _connectionServerDropdown.AddOptions(_connectionServers
+                .Select(server => string.IsNullOrWhiteSpace(server.displayName)
+                    ? server.id : server.displayName)
+                .ToList());
+            int local = _connectionServers.FindIndex(server =>
+                string.Equals(server.id, "aorebirth-local", StringComparison.OrdinalIgnoreCase));
+            _connectionServerDropdown.value = Mathf.Max(0, local);
+            _connectionServerDropdown.RefreshShownValue();
+        }
+
+        private void LoadServerCatalog()
+        {
+            _connectionServers.Clear();
+            string catalogFolder = Path.Combine(Application.streamingAssetsPath, "AOData");
+            string serversPath = Path.Combine(catalogFolder, "servers.json");
+            string dimensionsPath = Path.Combine(catalogFolder, "dimensions.json");
+            try
+            {
+                ServerCatalogFile catalog = File.Exists(serversPath)
+                    ? JsonConvert.DeserializeObject<ServerCatalogFile>(File.ReadAllText(serversPath))
+                    : null;
+                if (catalog?.servers != null)
+                {
+                    foreach (ServerCatalogEntry server in catalog.servers)
+                        AddServerCatalogEntry(server);
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Could not load server catalog '{serversPath}': {exception.Message}");
+            }
+
+            // dimensions.json is an alternative catalog. Prefer servers.json when
+            // both are present so the same dimensions are not listed twice.
+            if (_connectionServers.Count == 0)
+            {
+                try
+                {
+                    DimensionCatalogFile catalog = File.Exists(dimensionsPath)
+                        ? JsonConvert.DeserializeObject<DimensionCatalogFile>(File.ReadAllText(dimensionsPath))
+                        : null;
+                    if (catalog?.dimensions != null)
+                    {
+                        foreach (DimensionCatalogEntry dimension in catalog.dimensions)
+                        {
+                            if (dimension == null)
+                                continue;
+                            AddServerCatalogEntry(new ServerCatalogEntry
+                            {
+                                id = dimension.id,
+                                displayName = dimension.name,
+                                host = dimension.host,
+                                port = dimension.port,
+                                version = dimension.clientVersion,
+                                authentication = dimension.authentication,
+                                loginPrime = string.IsNullOrWhiteSpace(dimension.seed1)
+                                    ? dimension.privateKey : dimension.seed1,
+                                loginPublicSeed = string.IsNullOrWhiteSpace(dimension.seed2)
+                                    ? dimension.publicKey : dimension.seed2
+                            });
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning($"Could not load dimension catalog '{dimensionsPath}': {exception.Message}");
+                }
+            }
+
+            if (_connectionServers.Count == 0)
+            {
+                _connectionServers.Add(new ServerCatalogEntry
+                {
+                    id = "aorebirth-local",
+                    displayName = "AORebirth Local",
+                    host = "127.0.0.1",
+                    port = 7500,
+                    version = "18.8.62",
+                    authentication = "aorebirth"
+                });
+            }
+        }
+
+        private void AddServerCatalogEntry(ServerCatalogEntry server)
+        {
+            if (server == null || string.IsNullOrWhiteSpace(server.host)
+                || server.port <= 0 || server.port > 65535)
+                return;
+            if (string.IsNullOrWhiteSpace(server.authentication))
+            {
+                server.authentication = server.port == 7500 ? "aorebirth"
+                    : server.port == 7505 || server.port == 7506 ? "live"
+                    : server.port == 7000 ? "project-rubika" : string.Empty;
+            }
+            _connectionServers.Add(server);
+        }
+
+        private static void PlaceSetupControl(RectTransform control, float top, float height)
+        {
+            control.anchorMin = control.anchorMax = new Vector2(0.5f, 1f);
+            control.pivot = new Vector2(0.5f, 1f);
+            control.anchoredPosition = new Vector2(0f, -top);
+            control.sizeDelta = new Vector2(540f, height);
+        }
+
+        private void DetectAoInstallForSetup()
+        {
+            AOInstallValidation detected = AOInstallConfiguration.GetConfiguredInstall();
+            if (detected != null && detected.IsValid)
+            {
+                _connectionInstallInput.text = detected.RootPath;
+                SetConnectionSetupStatus($"AO {detected.ClientVersion} installation found.", true);
+            }
+            else
+            {
+                SetConnectionSetupStatus("No valid AO installation was detected. Enter its folder path.", false);
+            }
+        }
+
+#if UNITY_EDITOR
+        private void BrowseAoInstallForSetup()
+        {
+            string selected = UnityEditor.EditorUtility.OpenFolderPanel(
+                "Select Anarchy Online installation", _connectionInstallInput?.text ?? string.Empty, string.Empty);
+            if (!string.IsNullOrWhiteSpace(selected))
+                _connectionInstallInput.text = selected;
+        }
+#endif
+
+        private void SubmitConnectionSetup()
+        {
+            string username = _connectionUsernameInput?.text?.Trim() ?? string.Empty;
+            string password = _connectionPasswordInput?.text ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
+            {
+                SetConnectionSetupStatus("Enter both username and password.", false);
+                return;
+            }
+
+            AOInstallValidation install = AOInstallConfiguration.SetInstallPath(
+                _connectionInstallInput?.text?.Trim() ?? string.Empty);
+            if (install == null || !install.IsValid)
+            {
+                string error = install?.Errors != null ? string.Join(" ", install.Errors) : "Invalid AO installation.";
+                SetConnectionSetupStatus(error, false);
+                return;
+            }
+            _connectionInstallInput.text = install.RootPath;
+
+            int serverIndex = _connectionServerDropdown != null
+                ? _connectionServerDropdown.value : -1;
+            if (serverIndex < 0 || serverIndex >= _connectionServers.Count)
+            {
+                SetConnectionSetupStatus("Choose a server.", false);
+                return;
+            }
+            ServerCatalogEntry server = _connectionServers[serverIndex];
+            if (!string.Equals(server.authentication, "aorebirth", StringComparison.OrdinalIgnoreCase)
+                && (string.IsNullOrWhiteSpace(server.loginPrime)
+                    || string.IsNullOrWhiteSpace(server.loginPublicSeed)))
+            {
+                SetConnectionSetupStatus(
+                    $"Server '{server.displayName}' is missing its legacy authentication seeds.", false);
+                return;
+            }
+            _gameServerSession.ConfigureConnection(server.displayName, server.host, server.port,
+                server.version, server.authentication, server.loginPrime, server.loginPublicSeed);
+            _connectionContinueButton.interactable = false;
+            SetConnectionSetupStatus("Connecting and authenticating...", true);
+            LoadServerCharactersAsync(username, password);
+        }
+
+        private void SetConnectionSetupStatus(string message, bool success)
+        {
+            if (_connectionStatusText == null)
+                return;
+            _connectionStatusText.text = message ?? string.Empty;
+            _connectionStatusText.color = success
+                ? new Color(0.55f, 1f, 0.7f, 1f)
+                : new Color(1f, 0.62f, 0.48f, 1f);
+        }
+
+        private async void LoadServerCharactersAsync(string username, string password)
+        {
+            // This scene also contains the older Project Mayhem AO.Server JSON
+            // client. It must not enforce its strict-disconnected movement mode
+            // while AO.Client owns a live external-server session.
+            if (_authoritativeClient != null)
+                _authoritativeClient.enabled = false;
+            EnableExternalServerViewerMovement();
+
+            _characterSelectionView?.SetConnectionStatus("Connecting to AORebirth Local...");
+            try
+            {
+                IReadOnlyList<CharacterSummary> characters =
+                    await _gameServerSession.AuthenticateAsync(username, password);
+                var profiles = characters.Select(character =>
+                    new CharacterSelectionWindowView.CharacterProfile
+                    {
+                        ServerCharacterId = character.Id,
+                        Name = character.Name,
+                        Level = Mathf.Max(1, character.Level),
+                        BreedId = character.BreedId <= 0 ? 1 : character.BreedId,
+                        Sex = ResolveServerCharacterSex(character.BreedId, character.GenderId),
+                        ProfessionId = character.ProfessionId <= 0 ? 1 : character.ProfessionId,
+                        ProfessionName = ResolveServerProfessionName(character.ProfessionId),
+                        BreedLabel = ResolveBreedLabel(
+                            character.BreedId,
+                            (int)ResolveServerCharacterSex(character.BreedId, character.GenderId)),
+                        Height = CharacterSelectionWindowView.BodyHeightPreset.Medium,
+                        Weight = CharacterSelectionWindowView.BodyWeightPreset.Medium,
+                        StartPlayfieldId = character.PlayfieldId
+                    }).ToList();
+                var savedProfiles = LoadPersistedCharacterProfiles()
+                    .Where(profile => profile != null && !string.IsNullOrWhiteSpace(profile.Name))
+                    .GroupBy(profile => profile.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+                foreach (var profile in profiles)
+                {
+                    if (!savedProfiles.TryGetValue(profile.Name?.Trim() ?? string.Empty, out var saved)
+                        || saved.BreedId != profile.BreedId
+                        || saved.Sex != profile.Sex)
+                        continue;
+                    profile.HeadMeshKey = saved.HeadMeshKey ?? string.Empty;
+                    profile.Height = saved.Height;
+                    profile.Weight = saved.Weight;
+                }
+                foreach (var profile in profiles)
+                    EnsureProfileHasHead(profile);
+                // An empty character list is still a complete server response. Always
+                // replace the view's profiles so characters from the previous account
+                // cannot remain visible after switching servers or accounts.
+                _characterSelectionView?.SetProfiles(profiles);
+                if (profiles.Count > 0)
+                {
+                    _characterSelectionView?.SetConnectionStatus(
+                        $"Loading {profiles.Count} character appearance(s)...");
+                    HandleCharacterSelectionChanged(0);
+                    await WaitForVisibleCharacterPreviewsAsync();
+                }
+                else
+                {
+                    _activeProfileName = string.Empty;
+                    HandleCharacterSelectionChanged(-1);
+                }
+                _characterSelectionView?.SetConnectionStatus(
+                    $"Authenticated — {profiles.Count} server character(s) received.");
+                if (_connectionSetupRoot != null)
+                    _connectionSetupRoot.gameObject.SetActive(false);
+                if (_characterSelectionRoot != null)
+                    _characterSelectionRoot.gameObject.SetActive(true);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+                SetConnectionSetupStatus(exception.Message, false);
+                if (_connectionContinueButton != null)
+                    _connectionContinueButton.interactable = true;
+            }
+        }
+
+        private string ResolveServerProfessionName(int professionId)
+        {
+            IReadOnlyDictionary<int, string> lookup = _context?.GetProfessionLookup();
+            return lookup != null && lookup.TryGetValue(professionId, out string name)
+                ? name
+                : $"Profession {professionId}";
+        }
+
+        private static CharacterRuntimeBridge.CharacterSex ResolveServerCharacterSex(int breedId, int genderId)
+        {
+            // AO protocol stat values differ from CharacterSex: Uni=1, Male=2, Female=3.
+            if (breedId == 4 || genderId == 1)
+                return CharacterRuntimeBridge.CharacterSex.Uni;
+            if (genderId == 3)
+                return CharacterRuntimeBridge.CharacterSex.Female;
+            return CharacterRuntimeBridge.CharacterSex.Male;
         }
 
         private List<CharacterSelectionWindowView.CharacterProfile> CreateSeedProfiles()
@@ -186,10 +729,164 @@ namespace AO.Unity.Prototype
             if (profile == null)
                 return;
 
+            if (!string.IsNullOrWhiteSpace(profile.ServerCharacterId))
+            {
+                EnterServerWorldAsync(profile);
+                return;
+            }
+
+            CompleteCharacterPlay(profile);
+        }
+
+        private async void EnterServerWorldAsync(CharacterSelectionWindowView.CharacterProfile profile)
+        {
+            _characterSelectionView?.SetConnectionStatus($"Entering the world as {profile.Name}...");
+            var bootstrap = FindFirstObjectByType<PrototypeWorldBootstrap>();
+            bootstrap?.BeginExternalWorldEntryLoading();
+            // Character selection must never become the visual fallback while world entry
+            // continues. Restore it only from the failure path below.
+            if (_characterSelectionRoot != null)
+                _characterSelectionRoot.gameObject.SetActive(false);
+            // Apply the selected identity before any world work begins. The previous order
+            // left the bootstrap/default Solitus male visible until the playfield completed.
+            ApplyCharacterProfile(profile);
+            var selectedAppearance = _selfBridge != null
+                ? _selfBridge.GetComponent<CharacterAppearanceController>()
+                : null;
+            selectedAppearance?.PrewarmCurrentVisual();
+            selectedAppearance?.SetBodyVisualVisible(false);
+            try
+            {
+                Debug.Log($"[WorldEntry] Requesting zone handoff for '{profile.Name}'.");
+                AOGameServerSession.ZoneSnapshot zone =
+                    await _gameServerSession.EnterWorldAsync(profile.ServerCharacterId);
+                Debug.Log($"[WorldEntry] Zone bootstrap received: PF {zone.Bootstrap.PlayfieldId}.");
+                profile.StartPlayfieldId = zone.Bootstrap.PlayfieldId;
+                if (_selfBridge != null)
+                    _selfBridge.transform.position = Vector3.zero;
+                bool validBootstrapPosition = float.IsFinite(zone.Bootstrap.X)
+                    && float.IsFinite(zone.Bootstrap.Y)
+                    && float.IsFinite(zone.Bootstrap.Z)
+                    && zone.Bootstrap.X >= 0f
+                    && zone.Bootstrap.Z >= 0f
+                    && zone.Bootstrap.Y > -100f
+                    && zone.Bootstrap.Y < 10000f;
+                bool loadedPlayfield = bootstrap != null && _selfBridge != null
+                    && bootstrap.TransitionToPlayfield(
+                        zone.Bootstrap.PlayfieldId,
+                        _selfBridge.transform,
+                        validBootstrapPosition
+                            ? new Vector3(zone.Bootstrap.X, zone.Bootstrap.Y, zone.Bootstrap.Z)
+                            : null,
+                        explicitYaw: null,
+                        preferTeleportDefault: false);
+                if (loadedPlayfield)
+                {
+                    // GLB playfields defer the authoritative spawn until all renderers and
+                    // colliders are ready. Do not inspect the temporary origin or enable
+                    // outbound movement before that deferred spawn has completed.
+                    float playfieldLoadDeadline = Time.realtimeSinceStartup + 60f;
+                    while (bootstrap.ActivePlayfieldGlbLoadInProgress
+                           && Time.realtimeSinceStartup < playfieldLoadDeadline)
+                        await Task.Yield();
+
+                    if (bootstrap.ActivePlayfieldGlbLoadInProgress)
+                    {
+                        Debug.LogError($"[WorldEntry] PF {zone.Bootstrap.PlayfieldId} static geometry "
+                            + "did not finish within 60 seconds; releasing the loading overlay and "
+                            + "continuing with the network viewer fallback.");
+                        loadedPlayfield = false;
+                    }
+
+                    Vector3 sessionOriginWorld = Vector3.zero;
+                    if (loadedPlayfield && !validBootstrapPosition)
+                    {
+                        Vector3 safeAoPosition = bootstrap.ConvertWorldToAo(_selfBridge.transform.position);
+                        _gameServerSession.RebaseWorldOrigin(safeAoPosition);
+                        sessionOriginWorld = bootstrap.ConvertAoToWorld(safeAoPosition);
+                        Debug.LogWarning(
+                            $"[AO.Client] Replaced invalid PF {zone.Bootstrap.PlayfieldId} bootstrap position "
+                            + $"({zone.Bootstrap.X:F3}, {zone.Bootstrap.Y:F3}, {zone.Bootstrap.Z:F3}) "
+                            + $"with safe AO position {safeAoPosition:F3}.");
+                    }
+                    else if (loadedPlayfield)
+                    {
+                        Vector3 bootstrapAo = new Vector3(
+                            zone.Bootstrap.X, zone.Bootstrap.Y, zone.Bootstrap.Z);
+                        Vector3 resolvedAo = bootstrap.ConvertWorldToAo(_selfBridge.transform.position);
+                        if (Vector3.Distance(bootstrapAo, resolvedAo) > 0.01f)
+                        {
+                            _gameServerSession.RebaseWorldOrigin(resolvedAo);
+                            sessionOriginWorld = bootstrap.ConvertAoToWorld(resolvedAo);
+                            Debug.Log($"[AO.Client] Initial PF {zone.Bootstrap.PlayfieldId} spawn "
+                                + $"used teleport default {resolvedAo:F3} instead of bootstrap {bootstrapAo:F3}.");
+                        }
+                        else
+                        {
+                            sessionOriginWorld = bootstrap.ConvertAoToWorld(bootstrapAo);
+                        }
+                    }
+
+                    if (loadedPlayfield && !bootstrap.EnsureCharacterOnPlayfieldSurface(_selfBridge.transform))
+                        Debug.LogWarning($"[AO.Client] No walkable surface found near the PF {zone.Bootstrap.PlayfieldId} spawn.");
+                    if (loadedPlayfield)
+                    {
+                        _gameServerSession.SetWorldOriginOffset(sessionOriginWorld);
+                        _gameServerSession.SetTemporaryFloorVisible(false);
+                    }
+                }
+                if (!loadedPlayfield)
+                {
+                    Debug.LogWarning($"[AO.Client] Static playfield load failed for PF {zone.Bootstrap.PlayfieldId}; using network viewer floor.");
+                    _gameServerSession.SetWorldOriginOffset(Vector3.zero);
+                    _gameServerSession.SetTemporaryFloorVisible(true);
+                }
+                _gameServerSession.BeginPlayerMovement(_selfBridge != null
+                    ? _selfBridge.transform : null);
+                EnableExternalServerViewerMovement();
+                Debug.Log($"[AO.Client] Entered playfield {zone.Bootstrap.PlayfieldId} at "
+                    + $"({zone.Bootstrap.X:F3}, {zone.Bootstrap.Y:F3}, {zone.Bootstrap.Z:F3}); "
+                    + $"rendered {zone.Entities.Count} entities and {zone.Objects.Count} objects.");
+                bool selectedVisualReady = await WaitForBodyVisualAsync(selectedAppearance);
+                if (selectedVisualReady)
+                    selectedAppearance?.SetBodyVisualVisible(true);
+                else
+                    Debug.LogWarning("Selected character body did not become ready; refusing to show the stale bootstrap body.");
+                CompleteCharacterPlay(profile, transitionPrototypePlayfield: false);
+                bootstrap?.EndExternalWorldEntryLoading();
+            }
+            catch (Exception exception)
+            {
+                bootstrap?.EndExternalWorldEntryLoading();
+                selectedAppearance?.SetBodyVisualVisible(true);
+                Debug.LogException(exception);
+                if (_characterSelectionRoot != null)
+                {
+                    _characterSelectionRoot.gameObject.SetActive(true);
+                    _characterSelectionRoot.SetAsLastSibling();
+                }
+                _characterSelectionView?.SetConnectionStatus(
+                    $"World entry failed: {exception.Message}");
+            }
+        }
+
+        private void EnableExternalServerViewerMovement()
+        {
+            if (_selfBridge == null)
+                return;
+            var walker = _selfBridge.GetComponent<PrototypeWalkerController>();
+            walker?.SetLocalMovementEnabled(true);
+        }
+
+        private void CompleteCharacterPlay(CharacterSelectionWindowView.CharacterProfile profile,
+            bool transitionPrototypePlayfield = true)
+        {
+
             ApplyCharacterProfile(profile);
             _activeProfileName = string.IsNullOrWhiteSpace(profile.Name) ? "PrototypeCharacter" : profile.Name.Trim();
             Debug.Log($"[Prefs] Play selected '{_activeProfileName}'. Deferring layout apply until UI is stable.");
-            TryTransitionToProfilePlayfield(profile);
+            if (transitionPrototypePlayfield)
+                TryTransitionToProfilePlayfield(profile);
             SavePersistedCharacterProfilesFromSelection();
             SaveLocalClientPreferences();
             SetCharacterFlowActive(false);
@@ -198,17 +895,39 @@ namespace AO.Unity.Prototype
                 _characterSelectionRoot.gameObject.SetActive(false);
         }
 
-        private void HandleCharacterBackRequested()
+        private async void HandleCharacterBackRequested()
         {
-            CaptureWindowLayoutForCharacter(_activeProfileName);
-            UpdateActiveCharacterLastLocation();
-            SavePersistedCharacterProfilesFromSelection();
-            SaveLocalClientPreferences();
-#if UNITY_EDITOR
-            UnityEditor.EditorApplication.isPlaying = false;
-#else
-            Application.Quit();
-#endif
+            _characterSelectionView?.SetConnectionStatus("Disconnecting...");
+            try
+            {
+                if (_gameServerSession != null)
+                    await _gameServerSession.DisconnectAsync();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Server disconnect while returning to login failed: {exception.Message}");
+            }
+
+            _activeProfileName = string.Empty;
+            _characterSelectionView?.SetProfiles(Array.Empty<CharacterSelectionWindowView.CharacterProfile>());
+            HandleCharacterSelectionChanged(-1);
+            if (_connectionPasswordInput != null)
+                _connectionPasswordInput.text = string.Empty;
+            if (_connectionContinueButton != null)
+                _connectionContinueButton.interactable = true;
+            SetConnectionSetupStatus("Choose a server and sign in.", true);
+            if (_characterSelectionRoot != null)
+                _characterSelectionRoot.gameObject.SetActive(false);
+            if (_connectionSetupRoot != null)
+            {
+                _connectionSetupRoot.gameObject.SetActive(true);
+                _connectionSetupRoot.SetAsLastSibling();
+            }
+            if (_connectionUsernameInput != null)
+            {
+                _connectionUsernameInput.Select();
+                _connectionUsernameInput.ActivateInputField();
+            }
         }
 
         private void HandleCharacterProfilesChanged()
@@ -301,6 +1020,8 @@ namespace AO.Unity.Prototype
                 return;
 
             bool transitioned = bootstrap.TransitionToPlayfield(profile.StartPlayfieldId, _selfBridge.transform, null, yawTarget);
+            if (transitioned)
+                _gameServerSession?.SetTemporaryFloorVisible(false);
             if (!transitioned)
                 Debug.LogWarning($"Failed to transition newly selected character to PF {profile.StartPlayfieldId}.");
             else if (worldTarget.HasValue)
@@ -413,9 +1134,6 @@ namespace AO.Unity.Prototype
             };
 
             string root = Path.Combine(Application.streamingAssetsPath, "AOData", "ItemMeshes");
-            if (!Directory.Exists(root))
-                return result;
-
             string breedToken = breedId switch
             {
                 1 => "solitus",
@@ -436,7 +1154,9 @@ namespace AO.Unity.Prototype
                 ? "head_"
                 : $"head_{breedToken}{sexPrefixToken}";
 
-            foreach (var file in Directory.EnumerateFiles(root, "*.glb"))
+            foreach (var file in Directory.Exists(root)
+                ? Directory.EnumerateFiles(root, "*.glb")
+                : Enumerable.Empty<string>())
             {
                 string meshKey = Path.GetFileNameWithoutExtension(file);
                 if (string.IsNullOrWhiteSpace(meshKey))
@@ -449,6 +1169,39 @@ namespace AO.Unity.Prototype
                     continue;
                 if (!result.ContainsKey(meshKey))
                     result[meshKey] = meshKey;
+            }
+
+            try
+            {
+                AOInstallValidation install = AOInstallConfiguration.GetConfiguredInstall();
+                if (install != null && install.IsValid)
+                {
+                    string databasePrefix = breedId switch
+                    {
+                        1 => "head_solitus" + sexPrefixToken,
+                        2 => "head_opifex" + sexPrefixToken,
+                        3 => "head_nano" + (sex == CharacterRuntimeBridge.CharacterSex.Female ? "female" : "male"),
+                        4 => "head_atrox",
+                        _ => string.Empty
+                    };
+                    using (var database = new AOResourceDatabase(install.RootPath))
+                    {
+                        AOResourceCatalog catalog = AOResourceCatalog.Load(database);
+                        foreach (var pair in catalog.GetResources(AOResourceTypes.Mesh))
+                        {
+                            string meshKey = Path.GetFileNameWithoutExtension(pair.Value ?? string.Empty);
+                            if (string.IsNullOrWhiteSpace(databasePrefix)
+                                || !meshKey.StartsWith(databasePrefix, StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            if (!result.ContainsKey(meshKey))
+                                result[meshKey] = meshKey;
+                        }
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Could not enumerate AO head meshes for the character picker: {exception.Message}");
             }
 
             return result;
@@ -614,6 +1367,7 @@ namespace AO.Unity.Prototype
             var profiles = _characterSelectionView.GetProfiles();
             if (profiles == null || profiles.Count == 0)
             {
+                _carouselSelectedIndex = -1;
                 for (int i = 0; i < _characterCreatePreviewSlots.Length; i++)
                 {
                     var slot = _characterCreatePreviewSlots[i];
@@ -624,6 +1378,23 @@ namespace AO.Unity.Prototype
             }
 
             int center = Mathf.Clamp(selectedIndex, 0, profiles.Count - 1);
+            int delta = _carouselSelectedIndex >= 0 ? center - _carouselSelectedIndex : 0;
+            if (delta == 1)
+            {
+                CharacterPreviewSlot recycled = _characterCreatePreviewSlots[0];
+                _characterCreatePreviewSlots[0] = _characterCreatePreviewSlots[1];
+                _characterCreatePreviewSlots[1] = _characterCreatePreviewSlots[2];
+                _characterCreatePreviewSlots[2] = recycled;
+            }
+            else if (delta == -1)
+            {
+                CharacterPreviewSlot recycled = _characterCreatePreviewSlots[2];
+                _characterCreatePreviewSlots[2] = _characterCreatePreviewSlots[1];
+                _characterCreatePreviewSlots[1] = _characterCreatePreviewSlots[0];
+                _characterCreatePreviewSlots[0] = recycled;
+            }
+            _characterCreatePreviewBridge = _characterCreatePreviewSlots[1]?.Bridge;
+            _characterCreatePreviewAppearance = _characterCreatePreviewSlots[1]?.Appearance;
             int[] indices = { center - 1, center, center + 1 };
             for (int i = 0; i < _characterCreatePreviewSlots.Length; i++)
             {
@@ -638,14 +1409,44 @@ namespace AO.Unity.Prototype
                     continue;
 
                 var profile = profiles[profileIndex];
-                ApplyProfileToPreviewSlot(slot, profile);
+                EnsureProfileHasHead(profile);
+                bool actorAlreadyMatches = string.Equals(
+                    slot.Bridge.DisplayNameOverride, profile.Name, StringComparison.Ordinal);
+                if (!actorAlreadyMatches)
+                    ApplyProfileToPreviewSlot(slot, profile);
             }
 
-            UpdateCharacterSelectionCarouselLayout();
+            UpdateCharacterSelectionCarouselLayout(_carouselSelectedIndex < 0 || Math.Abs(delta) > 1);
+            _carouselSelectedIndex = center;
             UpdateCharacterCreatePreviewCameraFraming();
         }
 
-        private static void ApplyProfileToPreviewSlot(CharacterPreviewSlot slot, CharacterSelectionWindowView.CharacterProfile profile)
+        private void EnsureProfileHasHead(CharacterSelectionWindowView.CharacterProfile profile)
+        {
+            if (profile == null || !string.IsNullOrWhiteSpace(profile.HeadMeshKey))
+                return;
+            string cacheKey = $"{profile.BreedId}:{(int)profile.Sex}";
+            if (!_defaultHeadByBreedSex.TryGetValue(cacheKey, out string headKey))
+            {
+                headKey = string.Empty;
+                IReadOnlyDictionary<string, string> heads = ProvideHeadLookupForDraft(profile.BreedId, profile.Sex);
+                if (heads != null)
+                {
+                    foreach (string candidate in heads.Keys)
+                    {
+                        if (!string.IsNullOrWhiteSpace(candidate))
+                        {
+                            headKey = candidate;
+                            break;
+                        }
+                    }
+                }
+                _defaultHeadByBreedSex[cacheKey] = headKey;
+            }
+            profile.HeadMeshKey = headKey ?? string.Empty;
+        }
+
+        private void ApplyProfileToPreviewSlot(CharacterPreviewSlot slot, CharacterSelectionWindowView.CharacterProfile profile)
         {
             if (slot == null || slot.Bridge == null || profile == null)
                 return;
@@ -664,13 +1465,72 @@ namespace AO.Unity.Prototype
             slot.Bridge.DebugHeadMeshKey = profile.HeadMeshKey ?? string.Empty;
             slot.Bridge.DisplayNameOverride = profile.Name ?? string.Empty;
             slot.BaseScale = ComputeCharacterScale(profile.Height, profile.Weight);
-            slot.Transform.localScale = slot.BaseScale;
+            int visualRevision = ++slot.VisualRevision;
             if (slot.NameLabel != null)
                 slot.NameLabel.text = profile.Name ?? string.Empty;
             slot.Appearance?.PrewarmCurrentVisual();
+            if (slot.Appearance != null
+                && (!slot.Appearance.IsCurrentBodyVisualReady
+                    || !slot.Appearance.IsCurrentHeadVisualReady))
+            {
+                slot.Appearance.SetBodyVisualVisible(false);
+                _ = RevealPreviewWhenReadyAsync(slot, visualRevision);
+            }
         }
 
-        private void UpdateCharacterSelectionCarouselLayout()
+        private static async Task RevealPreviewWhenReadyAsync(CharacterPreviewSlot slot, int visualRevision)
+        {
+            if (slot?.Appearance == null)
+                return;
+            float deadline = Time.realtimeSinceStartup + 10f;
+            while ((!slot.Appearance.IsCurrentBodyVisualReady
+                    || !slot.Appearance.IsCurrentHeadVisualReady)
+                   && Time.realtimeSinceStartup < deadline)
+                await Task.Yield();
+            if (slot.VisualRevision == visualRevision
+                && slot.Transform != null && slot.Transform.gameObject.activeSelf
+                && slot.Appearance.IsCurrentBodyVisualReady)
+                slot.Appearance.SetBodyVisualVisible(true);
+        }
+
+        private async Task WaitForVisibleCharacterPreviewsAsync()
+        {
+            float deadline = Time.realtimeSinceStartup + 10f;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                bool ready = true;
+                for (int i = 0; i < _characterCreatePreviewSlots.Length; i++)
+                {
+                    CharacterPreviewSlot slot = _characterCreatePreviewSlots[i];
+                    if (slot?.Transform == null || !slot.Transform.gameObject.activeSelf)
+                        continue;
+                    if (slot.Appearance == null
+                        || !slot.Appearance.IsCurrentBodyVisualReady
+                        || !slot.Appearance.IsCurrentHeadVisualReady)
+                    {
+                        ready = false;
+                        break;
+                    }
+                }
+                if (ready)
+                    return;
+                await Task.Yield();
+            }
+            Debug.LogWarning("Character preview preloading timed out; keeping available previews.");
+        }
+
+        private static async Task<bool> WaitForBodyVisualAsync(CharacterAppearanceController appearance)
+        {
+            if (appearance == null)
+                return false;
+            float deadline = Time.realtimeSinceStartup + 10f;
+            while ((!appearance.IsCurrentBodyVisualReady || !appearance.IsCurrentHeadVisualReady)
+                   && Time.realtimeSinceStartup < deadline)
+                await Task.Yield();
+            return appearance.IsCurrentBodyVisualReady;
+        }
+
+        private void UpdateCharacterSelectionCarouselLayout(bool immediate = false)
         {
             if (_characterCreatePreviewSlots == null || _characterCreatePreviewSlots.Length == 0)
                 return;
@@ -693,26 +1553,57 @@ namespace AO.Unity.Prototype
                 float rad = angleDeg * Mathf.Deg2Rad;
                 float x = Mathf.Sin(rad) * radius;
                 float z = zCenter + Mathf.Cos(rad) * radius;
-                slot.Transform.localPosition = new Vector3(x, 0f, z);
+                slot.TargetLocalPosition = new Vector3(x, 0f, z);
 
                 // Face camera on yaw only so characters are always readable.
                 if (_characterCreatePreviewCamera != null)
                 {
-                    Vector3 toCamera = _characterCreatePreviewCamera.transform.position - slot.Transform.position;
+                    Vector3 targetWorldPosition = slot.Transform.parent != null
+                        ? slot.Transform.parent.TransformPoint(slot.TargetLocalPosition)
+                        : slot.TargetLocalPosition;
+                    Vector3 toCamera = _characterCreatePreviewCamera.transform.position - targetWorldPosition;
                     toCamera.y = 0f;
                     if (toCamera.sqrMagnitude > 0.0001f)
-                        slot.Transform.rotation = Quaternion.LookRotation(toCamera.normalized, Vector3.up);
+                        slot.TargetRotation = Quaternion.LookRotation(toCamera.normalized, Vector3.up);
                 }
 
                 // Keep selected character emphasized.
                 float emphasis = rel == 0 ? 1.08f : 0.82f;
-                slot.Transform.localScale = slot.BaseScale * emphasis;
+                slot.TargetLocalScale = slot.BaseScale * emphasis;
+                if (immediate)
+                {
+                    slot.Transform.localPosition = slot.TargetLocalPosition;
+                    slot.Transform.rotation = slot.TargetRotation;
+                    slot.Transform.localScale = slot.TargetLocalScale;
+                }
                 if (slot.NameLabel != null)
                 {
                     slot.NameLabel.gameObject.SetActive(rel == 0);
                     slot.NameLabel.transform.localPosition = rel == 0 ? new Vector3(0f, 1.20f, 0f) : new Vector3(0f, 2.2f, 0f);
                 }
             }
+        }
+
+        private void TickCharacterSelectionCarousel()
+        {
+            if (_createFlowUiActive)
+                return;
+            float blend = 1f - Mathf.Exp(-12f * Time.unscaledDeltaTime);
+            for (int i = 0; i < _characterCreatePreviewSlots.Length; i++)
+            {
+                CharacterPreviewSlot slot = _characterCreatePreviewSlots[i];
+                if (slot?.Transform == null || !slot.Transform.gameObject.activeSelf)
+                    continue;
+                slot.Transform.localPosition = Vector3.Lerp(
+                    slot.Transform.localPosition, slot.TargetLocalPosition, blend);
+                slot.Transform.rotation = Quaternion.Slerp(
+                    slot.Transform.rotation, slot.TargetRotation, blend);
+                slot.Transform.localScale = Vector3.Lerp(
+                    slot.Transform.localScale, slot.TargetLocalScale, blend);
+            }
+            // The selected actor itself moves from a neighboring carousel slot. Keep
+            // the camera framed on it during that interpolation instead of its old slot.
+            UpdateCharacterCreatePreviewCameraFraming();
         }
 
         private void HandleCreateFlowStateChanged(bool inCreateFlow)
@@ -1209,6 +2100,7 @@ namespace AO.Unity.Prototype
             _characterCreatePreviewAppearance = null;
             _characterCreatePreviewCamera = null;
             _characterCreatePreviewTexture = null;
+            _carouselSelectedIndex = -1;
             for (int i = 0; i < _characterCreatePreviewSlots.Length; i++)
                 _characterCreatePreviewSlots[i] = null;
         }

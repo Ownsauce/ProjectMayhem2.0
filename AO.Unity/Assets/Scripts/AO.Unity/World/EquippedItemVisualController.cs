@@ -5,7 +5,9 @@ using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
+using AO.Assets.ResourceDatabase;
 using AO.Unity.Prototype;
+using AO.Unity.Assets;
 using UnityEngine;
 
 namespace AO.Unity.World
@@ -189,6 +191,9 @@ namespace AO.Unity.World
         private int _backVisualSwapCooldownFrames;
         private int _lastEquippedSignature;
         private float _nextEquippedFullRefreshAt;
+        private ResourceDatabase _directItemDatabase;
+        private AbiffLoader _directItemLoader;
+        private AoImageTextureCache _directItemTextures;
 
         private void Awake()
         {
@@ -196,13 +201,14 @@ namespace AO.Unity.World
                 bridge = GetComponent<CharacterRuntimeBridge>();
             if (appearanceController == null)
                 appearanceController = GetComponent<CharacterAppearanceController>();
-            // Keep natural hand mapping: right hand uses right-hand transform and vice versa.
-            invertWeaponHandVisuals = false;
-            // Weapon baseline orientation calibrated for current mirrored character basis.
+            // AO CAT character meshes use a mirrored hand basis relative to Unity.
+            invertWeaponHandVisuals = true;
+            // Weapon baseline orientation calibrated for the mirrored CAT basis.
             rightHandItemLocalPosition = new Vector3(0.075f, -0.02f, 0f);
             leftHandItemLocalPosition = new Vector3(0.075f, -0.02f, 0f);
-            rightHandItemLocalEuler = new Vector3(0f, 100f, -90f);
-            leftHandItemLocalEuler = new Vector3(0f, 100f, 90f);
+            rightHandItemLocalEuler = new Vector3(0f, 100f, 90f);
+            leftHandItemLocalEuler = new Vector3(0f, 100f, -90f);
+            forcedHeadItemLocalPosition = Vector3.zero;
             LoadVisualOverrides();
             LoadDiagnosticsFile();
             if (writeEquipVisualReview && writeEquipVisualDiagnostics && _diagnosticsByKey.Count > 0)
@@ -245,6 +251,10 @@ namespace AO.Unity.World
                     Destroy(tex);
             }
             _generalTextureCache.Clear();
+            _directItemDatabase?.Dispose();
+            _directItemDatabase = null;
+            _directItemLoader = null;
+            _directItemTextures = null;
         }
 
         private void RefreshEquippedVisuals()
@@ -324,7 +334,11 @@ namespace AO.Unity.World
                 var inst = AO.Core.Characters.CharacterEquipment.GetItemInstance(kv.Value);
                 int aoid = inst?.Definition?.AOID ?? 0;
                 string itemName = inst?.Definition?.Name ?? string.Empty;
-                int itemClass = inst?.Definition?.DBType ?? 0;
+                int itemClass = 0;
+                var rawItem = aoid > 0
+                    ? AO.Data.Unity.AODataManager.Instance?.GetRawItemByAoid(aoid)
+                    : null;
+                itemClass = ResolveItemClass(rawItem, inst?.Definition?.DBType ?? 0);
                 if (aoid <= 0)
                 {
                     var dataItem = AO.Data.Unity.AODataManager.Instance != null
@@ -335,8 +349,7 @@ namespace AO.Unity.World
                         aoid = dataItem.DefinitionId;
                         itemName = dataItem.Definition.Name ?? itemName;
                         var raw = AO.Data.Unity.AODataManager.Instance.GetRawItemByAoid(dataItem.DefinitionId);
-                        if (raw != null)
-                            itemClass = raw.DBType;
+                        itemClass = ResolveItemClass(raw, itemClass);
                     }
                 }
                 if (aoid <= 0)
@@ -422,7 +435,10 @@ namespace AO.Unity.World
                     var inst = AO.Core.Characters.CharacterEquipment.GetItemInstance(kv.Value);
                     int aoid = inst?.Definition?.AOID ?? 0;
                     string itemName = inst?.Definition?.Name ?? string.Empty;
-                    int itemClass = inst?.Definition?.DBType ?? 0;
+                    var raw = aoid > 0
+                        ? AO.Data.Unity.AODataManager.Instance?.GetRawItemByAoid(aoid)
+                        : null;
+                    int itemClass = ResolveItemClass(raw, inst?.Definition?.DBType ?? 0);
                     if (aoid <= 0)
                         continue;
 
@@ -562,6 +578,14 @@ namespace AO.Unity.World
                     };
                 }
             }
+        }
+
+        private static int ResolveItemClass(AO.Data.Core.Item raw, int fallback)
+        {
+            var itemClass = raw?.StatValues?.FirstOrDefault(value => value != null && value.Stat == 76);
+            return itemClass != null && itemClass.RawValue > 0
+                ? itemClass.RawValue
+                : fallback;
         }
 
         private static int BuildMirroredShoulderStateKey(int sourceShoulderSlotId)
@@ -736,6 +760,7 @@ namespace AO.Unity.World
             }
 
             if ((slotId == headEquipSlotId
+                    || slotId == backEquipSlotId
                     || (allowShoulderResolution && (slotId == rightShoulderEquipSlotId || slotId == leftShoulderEquipSlotId)))
                 && TryResolveVisualFromSpellDataAB(
                     aoid,
@@ -749,6 +774,14 @@ namespace AO.Unity.World
                     out catalogMeshKey,
                     out resolutionMode,
                     out resolutionNotes))
+            {
+                return true;
+            }
+
+            if (TryResolveVisualFromRawStats(
+                    aoid, itemName, itemClass, slotId,
+                    out statId, out textureId, out meshKey, out anchorKey,
+                    out catalogMeshKey, out resolutionMode, out resolutionNotes))
             {
                 return true;
             }
@@ -876,6 +909,70 @@ namespace AO.Unity.World
             return resolved;
         }
 
+        private bool TryResolveVisualFromRawStats(
+            int aoid,
+            string itemName,
+            int itemClass,
+            int slotId,
+            out int statId,
+            out int textureId,
+            out string meshKey,
+            out string anchorKey,
+            out string catalogMeshKey,
+            out string resolutionMode,
+            out string resolutionNotes)
+        {
+            statId = 0;
+            textureId = 0;
+            meshKey = string.Empty;
+            anchorKey = ResolveDefaultAnchorKey(slotId);
+            catalogMeshKey = string.Empty;
+            resolutionMode = string.Empty;
+            resolutionNotes = string.Empty;
+
+            var raw = AO.Data.Unity.AODataManager.Instance?.GetRawItemByAoid(aoid);
+            if (raw?.StatValues == null)
+                return false;
+
+            bool ambiguousShoulderHand = slotId == rightHandEquipSlotId && slotId == leftShoulderEquipSlotId;
+            bool shoulder = (slotId == rightShoulderEquipSlotId || slotId == leftShoulderEquipSlotId)
+                && (!ambiguousShoulderHand || itemClass == 2);
+            int[] candidates = slotId == headEquipSlotId
+                ? new[] { StatHeadMesh, StatMesh }
+                : slotId == backEquipSlotId
+                    ? new[] { StatBackMesh, StatMesh }
+                    : shoulder
+                        ? new[] { StatShoulderMesh, StatMesh }
+                        : (slotId == rightHandEquipSlotId || slotId == leftHandEquipSlotId)
+                            ? new[] { StatWeaponMesh, StatMesh }
+                            : new[] { StatMesh };
+
+            int meshId = 0;
+            foreach (int candidate in candidates)
+            {
+                var value = raw.StatValues.FirstOrDefault(s => s != null && s.Stat == candidate);
+                if (value == null || value.RawValue <= 0 || (candidate == StatMesh && value.RawValue == 9013))
+                    continue;
+                statId = candidate;
+                meshId = value.RawValue;
+                break;
+            }
+
+            if (meshId <= 0)
+                return false;
+
+            anchorKey = shoulder
+                ? (ambiguousShoulderHand ? "LeftShoulder" : (slotId == leftShoulderEquipSlotId ? "LeftShoulder" : "RightShoulder"))
+                : ((slotId == rightHandEquipSlotId || slotId == leftHandEquipSlotId)
+                    ? ResolveWeaponHandAnchor(slotId)
+                    : ResolveDefaultAnchorKey(slotId));
+            meshKey = BuildDirectRdbMeshKey(meshId);
+            catalogMeshKey = meshKey;
+            resolutionMode = "DirectRdbStat";
+            resolutionNotes = $"Resolved directly from item stat {statId} to AO RDB mesh {meshId}.";
+            return true;
+        }
+
         private bool TryResolveVisualFromSpellDataAB(
             int aoid,
             string itemName,
@@ -922,8 +1019,10 @@ namespace AO.Unity.World
                         continue;
                     if (!TryParseFlexibleInt(spell.B, out int meshB) || meshB <= 0)
                         continue;
-                    if (!_abiffNamesById.TryGetValue(meshB, out var spellMesh) || string.IsNullOrWhiteSpace(spellMesh))
-                        continue;
+                    string spellMesh = _abiffNamesById.TryGetValue(meshB, out var namedMesh)
+                        && !string.IsNullOrWhiteSpace(namedMesh)
+                            ? namedMesh
+                            : BuildDirectRdbMeshKey(meshB);
 
                     if (!EvaluateSpellCriteria(spell.Criteria, breedValue, genderValue, out int score))
                         continue;
@@ -1360,6 +1459,9 @@ namespace AO.Unity.World
             if (string.IsNullOrWhiteSpace(meshKey))
                 return false;
 
+            if (TryParseDirectRdbMeshKey(meshKey, out _))
+                return true;
+
             var prefab = Resources.Load<GameObject>($"{itemMeshResourcesFolder}/{meshKey}");
             if (prefab != null)
                 return true;
@@ -1489,20 +1591,28 @@ namespace AO.Unity.World
             var root = new GameObject($"Equipped_{state.SlotId}_{state.MeshKey}");
             root.transform.SetParent(anchor, false);
 
-            var prefab = Resources.Load<GameObject>($"{itemMeshResourcesFolder}/{state.MeshKey}");
-            if (prefab != null)
+            if (TryParseDirectRdbMeshKey(state.MeshKey, out int directMeshId)
+                && TryCreateDirectRdbVisual(directMeshId, state.TextureId, root.transform))
             {
-                var child = Instantiate(prefab, root.transform, false);
-                child.name = state.MeshKey;
                 ApplyStateTextureToRoot(state);
             }
             else
             {
-                int requestId = 1;
-                if (_loadRequestIdsBySlot.TryGetValue(state.SlotId, out var existingRequestId))
-                    requestId = existingRequestId + 1;
-                _loadRequestIdsBySlot[state.SlotId] = requestId;
-                _ = LoadItemMeshFromGlbAsync(state, root.transform, requestId);
+                var prefab = Resources.Load<GameObject>($"{itemMeshResourcesFolder}/{state.MeshKey}");
+                if (prefab != null)
+                {
+                    var child = Instantiate(prefab, root.transform, false);
+                    child.name = state.MeshKey;
+                    ApplyStateTextureToRoot(state);
+                }
+                else
+                {
+                    int requestId = 1;
+                    if (_loadRequestIdsBySlot.TryGetValue(state.SlotId, out var existingRequestId))
+                        requestId = existingRequestId + 1;
+                    _loadRequestIdsBySlot[state.SlotId] = requestId;
+                    _ = LoadItemMeshFromGlbAsync(state, root.transform, requestId);
+                }
             }
 
             state.Root = root;
@@ -1520,6 +1630,46 @@ namespace AO.Unity.World
                     state.MeshKey,
                     state.ResolutionMode,
                     state.ResolutionNotes);
+            }
+        }
+
+        private static string BuildDirectRdbMeshKey(int meshId) => $"rdbmesh_{meshId}";
+
+        private static bool TryParseDirectRdbMeshKey(string meshKey, out int meshId)
+        {
+            const string prefix = "rdbmesh_";
+            meshId = 0;
+            return !string.IsNullOrWhiteSpace(meshKey)
+                && meshKey.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(meshKey.Substring(prefix.Length), out meshId)
+                && meshId > 0;
+        }
+
+        private bool TryCreateDirectRdbVisual(int meshId, int textureId, Transform parent)
+        {
+            try
+            {
+                if (_directItemLoader == null)
+                {
+                    AOInstallValidation install = AOInstallConfiguration.GetConfiguredInstall();
+                    if (install == null || !install.IsValid)
+                        return false;
+
+                    _directItemDatabase = new ResourceDatabase();
+                    _directItemDatabase.Initialize(install.RootPath);
+                    _directItemTextures = new AoImageTextureCache(_directItemDatabase);
+                    _directItemLoader = new AbiffLoader(
+                        _directItemDatabase,
+                        new AbiffMaterialFactory(_directItemDatabase),
+                        _directItemTextures);
+                }
+
+                return _directItemLoader.TryCreateVisual(meshId, parent, textureId, out _);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Direct equipped RDB mesh {meshId} failed: {ex.Message}");
+                return false;
             }
         }
 
@@ -1559,11 +1709,20 @@ namespace AO.Unity.World
                     }
                     break;
                 case "Head":
-                    if (forceHeadTransformOverride)
+                    if (IsAuthoredHeadAttractor(state.Root.transform.parent))
+                    {
+                        // The CAT mesh supplies this attachment transform in AO data.
+                        // Do not combine it with the fallback head-bone basis.
+                        state.Root.transform.localPosition = Vector3.zero;
+                        state.Root.transform.localRotation = Quaternion.identity;
+                        state.Root.transform.localScale = Vector3.one;
+                    }
+                    else if (forceHeadTransformOverride)
                     {
                         state.Root.transform.localPosition = forcedHeadItemLocalPosition;
                         state.Root.transform.localRotation = Quaternion.Euler(forcedHeadItemLocalEuler);
                         state.Root.transform.localScale = forcedHeadItemLocalScale;
+                        RotateHeadVisualAroundItsCenter(state, 180f);
                     }
                     else
                     {
@@ -1573,7 +1732,16 @@ namespace AO.Unity.World
                     }
                     break;
                 case "Back":
-                    if (IsBackArmorItem(state?.ItemName))
+                    if (TryParseDirectRdbMeshKey(state?.MeshKey, out _))
+                    {
+                        // AO wearable RDB meshes use the AO model basis, but should
+                        // remain centered on the spine rather than inheriting the
+                        // lateral tank-armor tuning.
+                        state.Root.transform.localPosition = backItemLocalPosition;
+                        state.Root.transform.localRotation = Quaternion.Euler(backArmorItemLocalEuler);
+                        state.Root.transform.localScale = backItemLocalScale;
+                    }
+                    else if (IsBackArmorItem(state?.ItemName))
                     {
                         state.Root.transform.localPosition = ResolveAdaptiveBackArmorLocalPosition(backArmorItemLocalPosition);
                         state.Root.transform.localRotation = Quaternion.Euler(backArmorItemLocalEuler);
@@ -1585,6 +1753,7 @@ namespace AO.Unity.World
                         state.Root.transform.localRotation = Quaternion.Euler(backItemLocalEuler);
                         state.Root.transform.localScale = backItemLocalScale;
                     }
+                    CenterBackVisualLaterally(state);
                     break;
                 case "Feet":
                     state.Root.transform.localPosition = feetItemLocalPosition;
@@ -1628,6 +1797,64 @@ namespace AO.Unity.World
                     state.Root.transform.localScale = leftShoulderLocalScale;
                     break;
             }
+        }
+
+        private static bool IsAuthoredHeadAttractor(Transform value) =>
+            value != null && string.Equals(
+                value.name, "AOAttractor_Attractor01_head", StringComparison.OrdinalIgnoreCase);
+
+        private static void RotateHeadVisualAroundItsCenter(EquippedVisualState state, float degrees)
+        {
+            if (state?.Root == null || Mathf.Abs(degrees) < 0.001f)
+                return;
+
+            var renderers = state.Root.GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0)
+                return;
+
+            Bounds bounds = renderers[0].bounds;
+            for (int i = 1; i < renderers.Length; i++)
+            {
+                if (renderers[i] != null)
+                    bounds.Encapsulate(renderers[i].bounds);
+            }
+
+            // AO head wearables can have an origin near the neck even when their
+            // rendered geometry is at the eyes. Rotate around the geometry itself
+            // so correcting an upside-down mesh does not orbit it down the body.
+            state.Root.transform.RotateAround(
+                bounds.center, state.Root.transform.forward, degrees);
+        }
+
+        private void CenterBackVisualLaterally(EquippedVisualState state)
+        {
+            if (state?.Root == null)
+                return;
+
+            var renderers = state.Root.GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0)
+                return;
+
+            Bounds bounds = renderers[0].bounds;
+            for (int i = 1; i < renderers.Length; i++)
+            {
+                if (renderers[i] != null)
+                    bounds.Encapsulate(renderers[i].bounds);
+            }
+
+            Transform parent = state.Root.transform.parent;
+            if (parent == null)
+                return;
+
+            // Center against the actual character's world-right axis. Spine-bone
+            // local X is not consistently lateral in AO CAT skeletons, which is
+            // why a local-X correction could leave backpacks under one shoulder.
+            Transform characterRoot = bridge != null ? bridge.transform : parent.root;
+            Vector3 spineWorld = parent.position;
+            Vector3 right = characterRoot.right.normalized;
+            float lateralOffset = Vector3.Dot(bounds.center - spineWorld, right);
+            if (Mathf.Abs(lateralOffset) > 0.0001f)
+                state.Root.transform.position -= right * lateralOffset;
         }
 
         private Vector3 ResolveAdaptiveShoulderLocalPosition(Vector3 baseLocalPosition)
@@ -1738,7 +1965,7 @@ namespace AO.Unity.World
             {
                 "LeftHand" => FindAnchor(forceLeftHandBoneName, "l_hand", "left hand", "lefthand", "hand.l", "bip01 l hand", "left_hand", "mixamorig:lefthand", "weapon_l"),
                 "RightHand" => FindAnchor(forceRightHandBoneName, "r_hand", "right hand", "rhand", "hand.r", "bip01 r hand", "right_hand", "mixamorig:righthand", "weapon_r"),
-                "Head" => FindAnchor(forceHeadBoneName, "head", "bip01 head", "neck"),
+                "Head" => ResolveHeadAnchor(),
                 "Back" => FindAnchor(forceBackBoneName, "spine2", "spine 2", "spine", "back", "chest"),
                 "Feet" => FindAnchor(forceFeetBoneName, "pelvis", "hips", "bip01 pelvis", "spine"),
                 "Chest" => FindAnchor(forceChestBoneName, "spine2", "spine 2", "chest", "spine", "pelvis"),
@@ -1749,6 +1976,54 @@ namespace AO.Unity.World
                 "LeftShoulder" => FindAnchor(forceLeftShoulderBoneName, "l clavicle", "leftshoulder", "left shoulder", "shoulder.l", "clavicle_l"),
                 _ => transform
             };
+        }
+
+        private Transform ResolveHeadAnchor()
+        {
+            if (!string.IsNullOrWhiteSpace(forceHeadBoneName))
+            {
+                var forced = FindTransformByNameContains(forceHeadBoneName);
+                if (forced != null)
+                    return forced;
+            }
+
+            var authoredAttractor = FindTransformByNameEquals("AOAttractor_Attractor01_head");
+            if (authoredAttractor != null)
+                return authoredAttractor;
+
+            var animator = GetComponentInChildren<Animator>(true);
+            if (animator != null && animator.isHuman)
+            {
+                var humanoidHead = animator.GetBoneTransform(HumanBodyBones.Head);
+                if (humanoidHead != null)
+                    return humanoidHead;
+            }
+
+            // Prefer exact/specific head names before the neck fallback.
+            var head = FindTransformByNameEquals(
+                "head", "bip01 head", "bip head", "head_joint", "head bone");
+            return head ?? FindAnchor(string.Empty, "bip01 head", "head", "neck");
+        }
+
+        private Transform FindTransformByNameEquals(params string[] candidates)
+        {
+            if (candidates == null || candidates.Length == 0)
+                return null;
+
+            var all = GetComponentsInChildren<Transform>(true);
+            for (int c = 0; c < candidates.Length; c++)
+            {
+                string candidate = candidates[c];
+                if (string.IsNullOrWhiteSpace(candidate))
+                    continue;
+                for (int i = 0; i < all.Length; i++)
+                {
+                    if (all[i] != null && string.Equals(all[i].name, candidate, StringComparison.OrdinalIgnoreCase))
+                        return all[i];
+                }
+            }
+
+            return null;
         }
 
         private Transform FindAnchor(string forcedToken, params string[] tokens)

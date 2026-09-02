@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using AO.Unity.Prototype;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -9,12 +10,14 @@ namespace AO.Unity.AOStyle
     public class ChatDamageWindowView : MonoBehaviour
     {
         private static ChatDamageWindowView _activeInstance;
+        private static readonly List<string> PendingSystemLines = new List<string>();
         public static event Action<string> ChatCommandIssued;
         private sealed class TabState
         {
             public string Id;
             public string Label;
             public bool IsDamage;
+            public bool IsReadOnly;
             public Button TabButton;
             public Text TabLabel;
             public RectTransform Panel;
@@ -29,23 +32,30 @@ namespace AO.Unity.AOStyle
         }
 
         private Font _font;
+        private PrototypeUiContext _context;
         private RectTransform _floatingParent;
         private RectTransform _bodyHost;
         private readonly Dictionary<string, TabState> _tabs = new Dictionary<string, TabState>(StringComparer.OrdinalIgnoreCase);
         private string _activeTabId = "Global";
 
-        public void Initialize(Font font, RectTransform floatingParent)
+        public void Initialize(PrototypeUiContext context, Font font,
+            RectTransform floatingParent)
         {
             _activeInstance = this;
+            _context = context;
             _font = font;
             _floatingParent = floatingParent;
             Build();
             Seed();
+            if (_context != null)
+                _context.StatusChanged += AppendSystemFeed;
             RefreshVisuals();
         }
 
         private void OnDestroy()
         {
+            if (_context != null)
+                _context.StatusChanged -= AppendSystemFeed;
             if (_activeInstance == this)
                 _activeInstance = null;
         }
@@ -56,6 +66,21 @@ namespace AO.Unity.AOStyle
                 return;
             if (_activeInstance._tabs.TryGetValue("Damage", out var damage))
                 _activeInstance.AppendLine(damage, $"[Damage] {line}");
+        }
+
+        public static void AppendSystemFeed(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                return;
+            if (_activeInstance == null)
+            {
+                PendingSystemLines.Add(line.Trim());
+                while (PendingSystemLines.Count > 50)
+                    PendingSystemLines.RemoveAt(0);
+                return;
+            }
+            if (_activeInstance._tabs.TryGetValue("System", out var system))
+                _activeInstance.AppendLine(system, $"[System] {line.Trim()}");
         }
 
         private void Build()
@@ -89,15 +114,18 @@ namespace AO.Unity.AOStyle
             CreateTab(tabs, "Team", isDamage: false);
             CreateTab(tabs, "Tells", isDamage: false);
             CreateTab(tabs, "Damage", isDamage: true);
+            CreateTab(tabs, "System", isDamage: false, isReadOnly: true);
         }
 
-        private void CreateTab(RectTransform tabsRow, string label, bool isDamage)
+        private void CreateTab(RectTransform tabsRow, string label, bool isDamage,
+            bool isReadOnly = false)
         {
             var state = new TabState
             {
                 Id = label,
                 Label = label,
-                IsDamage = isDamage
+                IsDamage = isDamage,
+                IsReadOnly = isReadOnly
             };
 
             state.TabButton = AOStyleUiFactory.CreateButton(
@@ -119,13 +147,13 @@ namespace AO.Unity.AOStyle
             var logHost = AOStyleUiFactory.CreatePanel("LogHost", state.Panel, new Color(0.05f, 0.07f, 0.1f, 0.98f));
             logHost.anchorMin = new Vector2(0f, 0f);
             logHost.anchorMax = new Vector2(1f, 1f);
-            logHost.offsetMin = new Vector2(4f, isDamage ? 4f : 30f);
+            logHost.offsetMin = new Vector2(4f, isDamage || isReadOnly ? 4f : 30f);
             logHost.offsetMax = new Vector2(-4f, -4f);
             state.LogRoot = AOStyleUiFactory.CreateScrollContent(logHost);
             state.LogScrollRect = state.LogRoot.GetComponentInParent<ScrollRect>();
             ConfigureLogScrolling(state, logHost);
 
-            if (!isDamage)
+            if (!isDamage && !isReadOnly)
             {
                 var inputHost = AOStyleUiFactory.CreatePanel("InputHost", state.Panel, new Color(0f, 0f, 0f, 0f));
                 inputHost.anchorMin = new Vector2(0f, 0f);
@@ -258,6 +286,13 @@ namespace AO.Unity.AOStyle
                 AppendLine(tells, "[System] Tells channel ready.");
             if (_tabs.TryGetValue("Damage", out var damage))
                 AppendLine(damage, "[Damage] Damage feed ready.");
+            if (_tabs.TryGetValue("System", out var system))
+            {
+                AppendLine(system, "[System] Status feed ready.");
+                for (int i = 0; i < PendingSystemLines.Count; i++)
+                    AppendLine(system, $"[System] {PendingSystemLines[i]}");
+                PendingSystemLines.Clear();
+            }
         }
 
         private void AppendLine(TabState tab, string line)

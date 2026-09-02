@@ -100,6 +100,18 @@ namespace AO.Server.Transport
         public int Nano { get; set; }
         public int MaxNano { get; set; }
         public long Experience { get; set; }
+        public int AvailableIp { get; set; }
+        public int BreedId { get; set; }
+        public int ProfessionId { get; set; }
+        public int Level { get; set; }
+        public int Sex { get; set; }
+        public List<StatValueSnapshot> Stats { get; set; } = new();
+    }
+
+    public sealed class StatValueSnapshot
+    {
+        public int StatId { get; set; }
+        public int Value { get; set; }
     }
 
     public sealed class RuntimeEntitySnapshot

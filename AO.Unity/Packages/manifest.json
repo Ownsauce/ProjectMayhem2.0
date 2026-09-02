@@ -1,5 +1,8 @@
 {
   "dependencies": {
+    "com.projectmayhem.ao-core": "file:../../AO.Core",
+    "com.projectmayhem.ao-client": "file:../../AO.Client",
+    "com.projectmayhem.ao-assets": "file:../../AO.Assets",
     "com.unity.ai.navigation": "2.0.10",
     "com.unity.cloud.gltfast": "6.16.0",
     "com.unity.collab-proxy": "2.11.3",

@@ -28,6 +28,8 @@ namespace AO.Unity.World
         [SerializeField] private float moveSpeed = 8f;
         [SerializeField] private float walkSpeed = 3f;
         [SerializeField] private float sprintMultiplier = 1.75f;
+        [SerializeField] private float movementAccelerationTime = 0.5f;
+        [SerializeField] private float movementStopEpsilon = 0.05f;
         [SerializeField] private float turnSpeedDegrees = 140f;
         [SerializeField] private float gravity = 20f;
         [SerializeField] private float jumpHeight = 1.2f;
@@ -68,6 +70,7 @@ namespace AO.Unity.World
         private Vector3 _authoritativeTargetPosition;
         private bool _hasAuthoritativeTarget;
         private Vector3 _lastMovementIntent = Vector3.zero;
+        private Vector3 _planarVelocity = Vector3.zero;
         private bool _movementBlockedByCollision;
         private Vector3 _blockedMovementDirection = Vector3.zero;
         private readonly RaycastHit[] _cameraCollisionHits = new RaycastHit[32];
@@ -263,7 +266,7 @@ namespace AO.Unity.World
 
         private static void WarpPointerToScreenPos(Vector2 pos)
         {
-#if ENABLE_INPUT_SYSTEM
+#if (UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN) && ENABLE_INPUT_SYSTEM
             var mouse = Mouse.current;
             if (mouse != null)
             {
@@ -301,7 +304,11 @@ namespace AO.Unity.World
         {
             if (IsGameplayInputBlockedByUi())
             {
+                if (_appearanceController == null)
+                    _appearanceController = GetComponent<CharacterAppearanceController>();
+                _appearanceController?.SetLocalLocomotionIntent(0f, 0f);
                 _lastMovementIntent = Vector3.zero;
+                _planarVelocity = Vector3.zero;
                 _movementBlockedByCollision = false;
                 _blockedMovementDirection = Vector3.zero;
                 MoveVerticalOnly();
@@ -323,7 +330,9 @@ namespace AO.Unity.World
 
             if (_appearanceController != null && _appearanceController.IsSitting)
             {
+                _appearanceController.SetLocalLocomotionIntent(0f, 0f);
                 _lastMovementIntent = Vector3.zero;
+                _planarVelocity = Vector3.zero;
                 _movementBlockedByCollision = false;
                 _blockedMovementDirection = Vector3.zero;
                 MoveVerticalOnly();
@@ -333,6 +342,7 @@ namespace AO.Unity.World
             float forward = ReadForwardInput();
             float strafe = ReadStrafeInput();
             _lastMovementIntent = BuildMovementIntent(forward, strafe);
+            _appearanceController?.SetLocalLocomotionIntent(forward, strafe);
 
             if (movementMode == MovementMode.Flight)
             {
@@ -383,6 +393,7 @@ namespace AO.Unity.World
         public void SetLocalMovementEnabled(bool enabled)
         {
             localMovementEnabled = enabled;
+            _planarVelocity = Vector3.zero;
             if (enabled)
             {
                 _hasAuthoritativeTarget = false;
@@ -414,6 +425,7 @@ namespace AO.Unity.World
             MovementMode previousMode = movementMode;
             movementMode = value;
             _verticalVelocity = 0f;
+            _planarVelocity = Vector3.zero;
             ApplyMovementModePresentation();
 
             if (previousMode == MovementMode.Flight && movementMode == MovementMode.Grounded)
@@ -467,6 +479,7 @@ namespace AO.Unity.World
             _movementBlockedByCollision = false;
             _blockedMovementDirection = Vector3.zero;
             _lastMovementIntent = Vector3.zero;
+            _planarVelocity = Vector3.zero;
             // Re-center camera behind character after server-authoritative reposition.
             RecenterCameraBehindCharacter();
         }
@@ -517,11 +530,42 @@ namespace AO.Unity.World
             bool walking = _appearanceController != null && _appearanceController.IsWalkModeEnabled;
             float baseSpeed = walking ? walkSpeed : moveSpeed;
             float speed = baseSpeed * ((!walking && IsSprinting()) ? sprintMultiplier : 1f);
-            return wish * speed;
+            Vector3 desiredVelocity = wish * speed;
+
+            // AO stops translation as soon as the final movement flag is released.
+            // Do not let the acceleration model turn key-up into a visible glide.
+            if (wish.sqrMagnitude <= 0.0001f)
+            {
+                _planarVelocity = Vector3.zero;
+                return Vector3.zero;
+            }
+
+            // Match the reference CharacterMotor steering: forward/back movement eases
+            // to its requested velocity over a short force-reach window. AO strafing
+            // intentionally snaps to speed and remains immediately responsive.
+            bool strafing = Mathf.Abs(strafe) > 0.001f;
+            if (strafing)
+            {
+                _planarVelocity = desiredVelocity;
+            }
+            else
+            {
+                float reachTime = Mathf.Max(0.01f, movementAccelerationTime);
+                float maxDelta = Mathf.Max(baseSpeed, speed) / reachTime * Time.deltaTime;
+                _planarVelocity = Vector3.MoveTowards(
+                    _planarVelocity, desiredVelocity, maxDelta);
+            }
+
+            float stopEpsilon = Mathf.Max(0f, movementStopEpsilon);
+            if (_planarVelocity.sqrMagnitude < stopEpsilon * stopEpsilon)
+                _planarVelocity = Vector3.zero;
+
+            return _planarVelocity;
         }
 
         private void HandleFlight(Vector3 horizontal)
         {
+            _planarVelocity = Vector3.zero;
             float vertical = ReadFlightVerticalInput();
             var motion = horizontal + Vector3.up * (vertical * flightVerticalSpeed);
 

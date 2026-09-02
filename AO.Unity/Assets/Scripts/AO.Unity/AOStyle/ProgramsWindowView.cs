@@ -207,8 +207,8 @@ namespace AO.Unity.AOStyle
                         continue;
 
                     if (string.Equals(_activeTab, "All", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(_activeTab, "Favorites", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(_context.GetProgramSchoolTabName(program.NanoId), _activeTab, StringComparison.OrdinalIgnoreCase))
+                        || (!string.Equals(_activeTab, "Favorites", StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(_context.GetProgramSchoolTabName(program.NanoId), _activeTab, StringComparison.OrdinalIgnoreCase)))
                     {
                         filtered.Add(program);
                     }

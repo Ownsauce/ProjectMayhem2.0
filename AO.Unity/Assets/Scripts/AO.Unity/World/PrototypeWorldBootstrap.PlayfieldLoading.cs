@@ -1,6 +1,9 @@
 using AO.Core.Characters;
 using AO.Core.Stats;
+using AO.Assets.ResourceDatabase;
 using AO.Data.Unity;
+using AO.Unity.Assets;
+using AodbTilemap = AODB.Common.RDBObjects.Tilemap;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -17,6 +20,16 @@ namespace AO.Unity.World
 {
     public partial class PrototypeWorldBootstrap : MonoBehaviour
     {
+        public bool HasStaticPlayfieldAssets(int pf)
+        {
+            if (pf <= 0)
+                return false;
+            if (TryResolveAutomaticPlayfieldFolderMode(pf, out _, out _))
+                return true;
+            return File.Exists(Path.Combine(
+                Application.streamingAssetsPath, playfieldsSubfolder, $"{pf}.json"));
+        }
+
         private string ResolvePlayfieldPackageFolderPath(int pf)
         {
             if (TryResolveAutomaticPlayfieldFolder(pf, out string autoFolder, out bool isGlbOverride) && !isGlbOverride)
@@ -423,6 +436,79 @@ namespace AO.Unity.World
             return true;
         }
 
+        private bool TryStartDirectOutdoorPlayfieldLoad(int pf, out Vector3 centerWorld)
+        {
+            centerWorld = Vector3.zero;
+            AOInstallValidation install = AOInstallConfiguration.GetConfiguredInstall();
+            if (install == null || !install.IsValid)
+                return false;
+
+            var database = new ResourceDatabase();
+            try
+            {
+                database.Initialize(install.RootPath);
+                AodbTilemap tilemap = database.Get<AodbTilemap>(pf);
+                if (tilemap?.Heightmap == null || tilemap.Heightmap.Count == 0
+                    || tilemap.ChunkSize <= 1)
+                {
+                    database.Dispose();
+                    return false;
+                }
+            }
+            catch (Exception exception)
+            {
+                database.Dispose();
+                Debug.LogWarning($"Direct outdoor probe failed for PF {pf}: {exception.Message}");
+                return false;
+            }
+
+            var root = new GameObject($"PF_{pf}_DirectOutdoor");
+            root.transform.SetParent(_worldRoot, false);
+            InitializePlayfieldGlbOverrideRuntimeState(pf, root);
+            _activePlayfieldGlbLoadInProgress = true;
+            int loadTicket = ++_activePlayfieldGlbLoadTicket;
+            StartCoroutine(LoadDirectOutdoorPlayfieldCoroutine(
+                pf, root.transform, database, loadTicket));
+            Debug.Log($"Loading outdoor PF {pf} directly from '{install.RootPath}'.");
+            return true;
+        }
+
+        private System.Collections.IEnumerator LoadDirectOutdoorPlayfieldCoroutine(
+            int pf, Transform parent, ResourceDatabase database, int loadTicket)
+        {
+            try
+            {
+                var config = new RenderConfig();
+                yield return new TerrainParser(database, config).BuildCoroutine(pf, parent);
+                if (loadTicket != _activePlayfieldGlbLoadTicket)
+                    yield break;
+
+                yield return new DirectOutdoorWaterBuilder(database).BuildCoroutine(pf, parent);
+                if (loadTicket != _activePlayfieldGlbLoadTicket)
+                    yield break;
+
+                var materials = new AbiffMaterialFactory(database);
+                yield return new StatelParser(database, config, materials).BuildCoroutine(pf, parent);
+                if (loadTicket != _activePlayfieldGlbLoadTicket)
+                    yield break;
+
+                AOInstallValidation install = AOInstallConfiguration.GetConfiguredInstall();
+                if (install != null && install.IsValid)
+                {
+                    var environment = parent.gameObject.AddComponent<UrpAoEnvironmentApplicator>();
+                    environment.Apply(install.RootPath, pf, database, materials);
+                }
+
+                FinalizePlayfieldGlbOverride(parent);
+                CompletePlayfieldGlbOverrideLoad(pf, parent, loadTicket);
+                Debug.Log($"Direct outdoor content ready for PF {pf}.");
+            }
+            finally
+            {
+                database?.Dispose();
+            }
+        }
+
         private void InitializePlayfieldGlbOverrideRuntimeState(int pf, GameObject root)
         {
             _activePlayfieldRoot = root.transform;
@@ -653,11 +739,32 @@ namespace AO.Unity.World
 
             _playfieldLoadingOverlayShownAt = Time.realtimeSinceStartup;
             _playfieldLoadingOverlayRoot.SetActive(true);
+            _playfieldLoadingOverlayRoot.transform.SetAsLastSibling();
+            Canvas overlayCanvas = _playfieldLoadingOverlayRoot.GetComponent<Canvas>();
+            if (overlayCanvas != null)
+            {
+                overlayCanvas.overrideSorting = true;
+                overlayCanvas.sortingOrder = short.MaxValue;
+            }
             StartLoadingLogoSweepAnimation();
+        }
+
+        public void BeginExternalWorldEntryLoading()
+        {
+            _externalWorldEntryLoadingHold = true;
+            ShowPlayfieldLoadingOverlay();
+        }
+
+        public void EndExternalWorldEntryLoading()
+        {
+            _externalWorldEntryLoadingHold = false;
+            HidePlayfieldLoadingOverlay(immediate: true);
         }
 
         private void HidePlayfieldLoadingOverlay(bool immediate = false)
         {
+            if (_externalWorldEntryLoadingHold)
+                return;
             if (_playfieldLoadingOverlayRoot == null)
                 return;
 
@@ -862,6 +969,7 @@ namespace AO.Unity.World
 
             var canvas = root.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.overrideSorting = true;
             canvas.sortingOrder = short.MaxValue;
             root.AddComponent<CanvasScaler>();
             root.AddComponent<GraphicRaycaster>();
@@ -989,6 +1097,9 @@ namespace AO.Unity.World
             AddCandidate(normalized);
             AddCandidate(basePath);
             AddCandidate(basePath + ".svg");
+            AddCandidate("Logo/project_mayhem_logo_3");
+            AddCandidate("Logo/project_mayhem_logo_2");
+            AddCandidate("Logo/project_mayhem_logo");
 
             for (int i = 0; i < candidatePaths.Count; i++)
             {
@@ -1053,6 +1164,9 @@ namespace AO.Unity.World
             AddCandidate(normalized);
             AddCandidate(basePath);
             AddCandidate(basePath + ".svg");
+            AddCandidate("Logo/project_mayhem_logo_3");
+            AddCandidate("Logo/project_mayhem_logo_2");
+            AddCandidate("Logo/project_mayhem_logo");
 
             var lines = new List<string>();
             for (int i = 0; i < candidatePaths.Count; i++)

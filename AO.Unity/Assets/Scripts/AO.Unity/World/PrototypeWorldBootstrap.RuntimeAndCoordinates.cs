@@ -6,8 +6,6 @@ namespace AO.Unity.World
 {
     public partial class PrototypeWorldBootstrap
     {
-        [SerializeField] private bool collapseRuntimeStreamingDebugHud = false;
-
         private void Update()
         {
             UpdateRuntimeGlbAttachQueue();
@@ -73,38 +71,6 @@ namespace AO.Unity.World
                     $"[PerfBudget] Frame spike WARN: {frameMs:0.0}ms phase={_clientLoadPhase} pf={_activePlayfieldId}.");
                 _nextFrameSpikeLogAt = Time.unscaledTime + Mathf.Max(0.1f, frameSpikeLogCooldownSeconds);
             }
-        }
-
-        private void OnGUI()
-        {
-            if (!showRuntimeStreamingDebugHud)
-                return;
-
-            const float expandedWidth = 690f;
-            const float expandedHeight = 52f;
-            const float margin = 12f;
-            var expandedRect = new Rect(Mathf.Max(margin, Screen.width - expandedWidth - margin), margin, expandedWidth, expandedHeight);
-            var collapsedRect = new Rect(Mathf.Max(margin, Screen.width - 36f - margin), margin, 36f, 24f);
-
-            if (collapseRuntimeStreamingDebugHud)
-            {
-                if (GUI.Button(collapsedRect, "▸"))
-                    collapseRuntimeStreamingDebugHud = false;
-                return;
-            }
-
-            GUI.color = new Color(0f, 0f, 0f, 0.65f);
-            GUI.Box(expandedRect, GUIContent.none);
-            GUI.color = Color.white;
-            float activeRadius = Mathf.Max(runtimeObjectRing0Radius, runtimeObjectStreamingRadius);
-            string line =
-                $"PF={_activePlayfieldId} phase={_clientLoadPhase} " +
-                $"deferredQueue(runtime/static)={_runtimeDeferredQueueCount}/{_staticDeferredQueueCount} streamRadius={activeRadius:0.#}m " +
-                $"loadBudget(warn/err)={_loadBudgetWarnCount}/{_loadBudgetErrorCount} " +
-                $"frameBudget(warn/err)={_frameBudgetWarnCount}/{_frameBudgetErrorCount}";
-            GUI.Label(new Rect(expandedRect.x + 8f, expandedRect.y + 16f, expandedRect.width - 30f, 20f), line);
-            if (GUI.Button(new Rect(expandedRect.xMax - 24f, expandedRect.y + 4f, 18f, 16f), "▾"))
-                collapseRuntimeStreamingDebugHud = true;
         }
 
         private void UpdateRuntimeDynelGlbFallbackRecovery()

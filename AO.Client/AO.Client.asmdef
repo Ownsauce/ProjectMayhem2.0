@@ -2,8 +2,7 @@
     "name": "AO.Client",
     "rootNamespace": "",
     "references": [
-        "GUID:0a314f6dcfd3ef34594f563ee8b6f2f8",
-        "GUID:1f2ef0f3d6785b543b3d0a57de1ee320"
+        "GUID:0a314f6dcfd3ef34594f563ee8b6f2f8"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

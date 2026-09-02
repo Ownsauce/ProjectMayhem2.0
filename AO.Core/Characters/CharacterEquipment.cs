@@ -41,5 +41,16 @@ namespace AO.Core.Characters
         }
 
         public IReadOnlyDictionary<int, long> GetAllEquipped() => _equipped;
+
+        public void ApplyAuthoritative(IReadOnlyDictionary<int, long> equipped)
+        {
+            _equipped.Clear();
+            if (equipped == null) return;
+            foreach (KeyValuePair<int, long> pair in equipped)
+            {
+                if (pair.Key > 0 && pair.Value != 0)
+                    _equipped[pair.Key] = pair.Value;
+            }
+        }
     }
 }

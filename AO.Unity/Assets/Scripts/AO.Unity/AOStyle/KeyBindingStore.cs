@@ -291,7 +291,7 @@ namespace AO.Unity.AOStyle
                 A("Windows","perks_window","Perks Window",true,K("P", shift: true)),
                 A("Windows","quest_editor_window","Quest Editor",false,K("F11")),
                 A("Windows","teleport_window","Teleport",false,K("T", ctrl: true)),
-                A("Windows","status_window","Status Window",false,K("LeftBracket", ctrl: true)),
+                A("Windows","status_window","Chat / System Window",false,K("LeftBracket", ctrl: true)),
                 A("Windows","character_settings_window","Character Settings Window",false,K("RightBracket", ctrl: true)),
                 A("Windows","toggle_inventory","Inventory",false,K("I")),
                 A("Windows","toggle_item_browser","Item Browser",false,K("F12")),

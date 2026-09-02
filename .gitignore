@@ -61,6 +61,14 @@ Desktop.ini
 .env
 .env.*
 !.env.example
+*.credentials
+*.credentials.*
+credentials.json
+credentials.*.json
+*.secrets.json
+secrets.json
+*.token
+*.tokens
 *.pfx
 *.p12
 *.pem
@@ -86,6 +94,13 @@ Desktop.ini
 # copyrighted material. They are intentionally not distributed with this
 # source repository. See DATA_SETUP.md.
 /AO.Unity/Assets/StreamingAssets/AOData/
+!/AO.Unity/Assets/StreamingAssets/AOData/
+/AO.Unity/Assets/StreamingAssets/AOData/*
+!/AO.Unity/Assets/StreamingAssets/AOData/servers.json
+!/AO.Unity/Assets/StreamingAssets/AOData/servers.json.meta
+!/AO.Unity/Assets/StreamingAssets/AOData/UI/
+!/AO.Unity/Assets/StreamingAssets/AOData/UI/player_select_bg.png
+!/AO.Unity/Assets/StreamingAssets/AOData/UI/player_select_bg.png.meta
 /AO.Unity/Assets/StreamingAssets/AOData.meta
 /AO.Unity/Assets/Resources/WorldMeshes/
 /AO.Unity/Assets/Resources/WorldMeshes.meta
@@ -109,3 +124,21 @@ Desktop.ini
 
 # Third-party tool obtained separately from its upstream repository
 /_external/AOStatelParser/
+
+# Local reference repositories and separately obtained third-party source trees
+/Lost[Ee]den/
+/AODB/
+/AOGLTF/
+/SharpNav/
+
+# Locally supplied third-party runtime tools
+# AODB's Unity runtime assemblies are intentionally repository-managed.
+/AO.Unity/Assets/StreamingAssets/Tools/AOGLTF/
+/AO.Unity/Assets/StreamingAssets/Tools/AOGLTF.meta
+
+# Local AO client installations, exports, and disposable asset caches
+/AOClient/
+/AOClientCopy/
+/Anarchy Online/
+/exports/
+/cache/

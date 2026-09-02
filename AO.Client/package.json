@@ -1,0 +1,6 @@
+{
+  "name": "com.projectmayhem.ao-client",
+  "version": "2.0.0",
+  "displayName": "Project Mayhem AO.Client",
+  "description": "Engine-neutral Anarchy Online server client backends and session models."
+}

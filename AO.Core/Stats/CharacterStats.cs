@@ -49,11 +49,16 @@ namespace AO.Core.Stats
         public int GetBaseStat(int statId)
             => _stats.TryGetValue(statId, out var s) ? s.BaseValue : 0;
 
+        public bool HasBaseStat(int statId) => _stats.ContainsKey(statId);
+
         public int GetModifiedStat(int statId)
             => _stats.TryGetValue(statId, out var s) ? s.ModifiedValue : 0;
 
         public int GetTrickleBonus(int statId)
             => _trickleBonuses.TryGetValue(statId, out var bonus) ? bonus : 0;
+
+        public IReadOnlyDictionary<int, int> GetBaseStatsSnapshot()
+            => _stats.ToDictionary(pair => pair.Key, pair => pair.Value.BaseValue);
 
         public int GetBaseWithTrickle(int statId)
             => GetBaseStat(statId) + GetTrickleBonus(statId);

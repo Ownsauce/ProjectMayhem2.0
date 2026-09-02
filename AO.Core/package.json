@@ -1,0 +1,6 @@
+{
+  "name": "com.projectmayhem.ao-core",
+  "version": "2.0.0",
+  "displayName": "Project Mayhem AO.Core",
+  "description": "Engine-neutral Project Mayhem gameplay and domain models."
+}

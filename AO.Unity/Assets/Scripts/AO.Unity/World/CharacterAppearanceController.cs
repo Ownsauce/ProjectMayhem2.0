@@ -10,6 +10,7 @@ using UnityEngine.Playables;
 using UnityEngine;
 using UnityEngine.UI;
 using AO.Unity;
+using AO.Unity.Assets;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -143,7 +144,7 @@ namespace AO.Unity.World
         [SerializeField] private int fallbackTextureId = 8760;
         [SerializeField] private bool overrideImportedMeshTextures = false;
         [SerializeField] private bool flipCharacterVisualX = true;
-        [SerializeField] private float animationBlendSpeed = 8f;
+        [SerializeField] private float animationBlendSpeed = 5f;
         [SerializeField] private bool playMoveStartClip = false;
         [SerializeField] private bool enableUnarmedAttackToggle = true;
         [SerializeField] private bool attackToggleActive;
@@ -203,7 +204,7 @@ namespace AO.Unity.World
         [SerializeField] private float meleeHitFlashSize = 0.18f;
         [Header("Debug Head Preview")]
         [SerializeField] private Vector3 debugHeadLocalPosition = Vector3.zero;
-        [SerializeField] private Vector3 debugHeadLocalEuler = new Vector3(90f, 90f, 180f);
+        [SerializeField] private Vector3 debugHeadLocalEuler = new Vector3(90f, 90f, 0f);
         [SerializeField] private Vector3 debugHeadLocalScale = Vector3.one;
         [SerializeField, Range(0f, 1f)] private float debugHeadAnchorNormalizedY = 0.18f;
         [SerializeField, Range(0f, 1f)] private float opifexFemaleHeadAnchorNormalizedY = 0.15f;
@@ -239,7 +240,7 @@ namespace AO.Unity.World
         private readonly Dictionary<string, Vector3> _headPreviewOffsetByMeshKey = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Vector3> _headPreviewEulerByMeshKey = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, float> _headPreviewAnchorYByMeshKey = new(StringComparer.OrdinalIgnoreCase);
-        private static readonly Vector3 DefaultDebugHeadLocalEuler = new Vector3(90f, 90f, 180f);
+        private static readonly Vector3 DefaultDebugHeadLocalEuler = new Vector3(90f, 90f, 0f);
 
         private const string ActionRun = "Run";
         private const string ActionWalk = "Walk";
@@ -272,6 +273,7 @@ namespace AO.Unity.World
         private string _currentMeshResourceName = string.Empty;
         private int _meshLoadRequestId;
         private string _meshLoadInProgressName = string.Empty;
+        private bool _characterVisualsVisible = true;
         private Animator _spawnedAnimator;
         private PlayableGraph _animationGraph;
         private AnimationMixerPlayable _animationMixer;
@@ -326,6 +328,9 @@ namespace AO.Unity.World
         private string _pendingJumpActionKey = string.Empty;
         private float _lastJumpKeyPressTime = -10f;
         private bool _restoreAttackPoseAfterJump;
+        private float _localLocomotionForward;
+        private float _localLocomotionStrafe;
+        private int _localLocomotionIntentFrame = -1;
         private GameObject _equippedItemVisual;
         private string _equippedItemVisualKey = string.Empty;
         private int _equippedItemVisualSlotId = -1;
@@ -444,6 +449,49 @@ namespace AO.Unity.World
         {
             int breedId = bridge?.Character?.BreedId ?? 1;
             EnsureBreedVisualPrefab(breedId <= 0 ? 1 : breedId);
+        }
+
+        public bool IsCurrentBodyVisualReady
+        {
+            get
+            {
+                if (bridge?.Character == null || _spawnedPrefabVisual == null || targetRenderer == null)
+                    return false;
+
+                int breedId = bridge.Character.BreedId <= 0 ? 1 : bridge.Character.BreedId;
+                if (!_breedMeshResourceNames.TryGetValue(breedId, out string baseName))
+                    return false;
+                string expected = ResolveMeshResourceForSex(baseName, breedId);
+                if (!string.IsNullOrWhiteSpace(_temporaryMeshResourceOverride))
+                    expected = _temporaryMeshResourceOverride;
+                return string.Equals(_currentMeshResourceName, expected,
+                    StringComparison.OrdinalIgnoreCase)
+                    && string.IsNullOrWhiteSpace(_meshLoadInProgressName);
+            }
+        }
+
+        public bool IsCurrentHeadVisualReady
+        {
+            get
+            {
+                string expected = bridge != null ? bridge.DebugHeadMeshKey ?? string.Empty : string.Empty;
+                return string.IsNullOrWhiteSpace(expected)
+                    ? _debugHeadVisual == null && string.IsNullOrWhiteSpace(_debugHeadLoadInProgressKey)
+                    : _debugHeadVisual != null
+                        && string.Equals(_debugHeadMeshKey, expected, StringComparison.OrdinalIgnoreCase)
+                        && string.IsNullOrWhiteSpace(_debugHeadLoadInProgressKey);
+            }
+        }
+
+        public void SetBodyVisualVisible(bool visible)
+        {
+            _characterVisualsVisible = visible;
+            if (_spawnedPrefabVisual != null)
+                _spawnedPrefabVisual.SetActive(visible);
+            if (_generatedVisual != null)
+                _generatedVisual.SetActive(visible);
+            if (_debugHeadVisual != null)
+                _debugHeadVisual.SetActive(visible);
         }
 
         public string CurrentMeshResourceName => _currentMeshResourceName ?? string.Empty;
@@ -748,6 +796,7 @@ namespace AO.Unity.World
             _generatedVisual.name = generatedVisualName;
             _generatedVisual.transform.SetParent(transform, false);
             _generatedVisual.transform.localPosition = generatedVisualLocalPosition;
+            _generatedVisual.SetActive(_characterVisualsVisible);
             _currentMeshResourceName = string.Empty;
 
             var generatedCollider = _generatedVisual.GetComponent<Collider>();
@@ -852,6 +901,7 @@ namespace AO.Unity.World
 
             _spawnedPrefabVisual = Instantiate(prefab, transform, false);
             _spawnedPrefabVisual.name = meshResourceName;
+            _spawnedPrefabVisual.SetActive(_characterVisualsVisible);
             ApplyVisualRootMirror();
             InvalidateEquippedTextureState();
             RemoveDefaultFallbackVisual();
@@ -907,7 +957,51 @@ namespace AO.Unity.World
             object importer = null;
             try
             {
+                GameObject directVisual = await DirectCatMeshRuntime.InstantiateAsync(meshResourceName, transform);
+                if (directVisual != null)
+                {
+                    if (!CanAttachRuntimeVisual(requestId))
+                    {
+                        Destroy(directVisual);
+                        return;
+                    }
+
+                    var directRenderer = directVisual.GetComponentInChildren<Renderer>(true);
+                    if (directRenderer != null)
+                    {
+                        if (_spawnedPrefabVisual != null)
+                            Destroy(_spawnedPrefabVisual);
+                        DisposeImporter(_runtimeVisualImporter);
+                        _runtimeVisualImporter = null;
+                        var directPreviousRenderer = targetRenderer;
+                        _spawnedPrefabVisual = directVisual;
+                        _spawnedPrefabVisual.SetActive(_characterVisualsVisible);
+                        ApplyVisualRootMirror();
+                        InvalidateEquippedTextureState();
+                        targetRenderer = directPreviousRenderer;
+                        RemoveDefaultFallbackVisual();
+                        if (_generatedVisual != null)
+                        {
+                            Destroy(_generatedVisual);
+                            _generatedVisual = null;
+                        }
+                        targetRenderer = directRenderer;
+                        _currentMeshResourceName = meshResourceName;
+                        _initializedScale = false;
+                        CaptureBaseScale();
+                        SyncHandsTintToArms();
+                        InitializeAnimationPlayback();
+                        ApplyBreedScale(breedId);
+                        ApplyBreedTexture(breedId);
+                        Debug.Log($"Loaded '{meshResourceName}' directly from AO CatMesh data.");
+                        return;
+                    }
+                    Destroy(directVisual);
+                }
+
                 string meshPath = ResolveMeshPath(meshResourceName);
+                if (string.IsNullOrWhiteSpace(meshPath) || !File.Exists(meshPath))
+                    meshPath = await AOCharacterMeshResolver.ResolveAsync(meshResourceName);
                 meshPath = GlbDataUriLoadPathResolver.Resolve(meshPath, true);
                 if (string.IsNullOrWhiteSpace(meshPath) || !File.Exists(meshPath))
                 {
@@ -954,6 +1048,7 @@ namespace AO.Unity.World
 
                 var previousRenderer = targetRenderer;
                 _spawnedPrefabVisual = nextVisual;
+                _spawnedPrefabVisual.SetActive(_characterVisualsVisible);
                 ApplyVisualRootMirror();
                 InvalidateEquippedTextureState();
                 targetRenderer = previousRenderer;
@@ -1390,7 +1485,10 @@ namespace AO.Unity.World
 
         private void UpdateMovementAnimation()
         {
-            if (!_animationGraphReady && !_legacyAnimationReady)
+            CatAnimPlayer directAnim = _spawnedPrefabVisual != null
+                ? _spawnedPrefabVisual.GetComponentInChildren<CatAnimPlayer>(true)
+                : null;
+            if (directAnim == null && !_animationGraphReady && !_legacyAnimationReady)
                 return;
 
             // Once death playback starts, suppress regular idle/move/attack blending so
@@ -1406,27 +1504,36 @@ namespace AO.Unity.World
             bool backwardPressed = IsBackwardPressed();
             bool strafeLeftPressed = IsStrafeLeftPressed();
             bool strafeRightPressed = IsStrafeRightPressed();
+            // The local motor owns gameplay input. Reuse its exact sample instead of
+            // polling again here: UI focus checks can otherwise make LateUpdate see
+            // no keys and overwrite the motor-selected locomotion clip with idle.
+            if (_localLocomotionIntentFrame >= Time.frameCount - 1)
+            {
+                forwardPressed = _localLocomotionForward > 0.001f;
+                backwardPressed = _localLocomotionForward < -0.001f;
+                strafeLeftPressed = _localLocomotionStrafe < -0.001f;
+                strafeRightPressed = _localLocomotionStrafe > 0.001f;
+            }
             bool externalMove = Time.time < _externalMoveUntil;
             if (externalMove)
                 forwardPressed = true;
             bool jumpPressedThisFrame = WasSpacePressedThisFrame();
             if (jumpPressedThisFrame)
                 _lastJumpKeyPressTime = Time.time;
-            if (_characterController != null && _characterController.isGrounded && jumpPressedThisFrame)
-            {
-                _jumpForwardIntentLatched = forwardPressed
-                    || string.Equals(_activeMoveAction, ActionRun, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(_activeMoveAction, ActionWalk, StringComparison.OrdinalIgnoreCase);
-            }
-            float speed = CalculateCurrentSpeed();
+            CalculateCurrentSpeed();
             bool hasMotionInput = externalMove || forwardPressed || backwardPressed || strafeLeftPressed || strafeRightPressed;
+            // Local locomotion follows held movement flags. The reference motor calls
+            // Halt when the last translation flag clears, so key-up must select idle
+            // immediately instead of preserving a stale direction from root velocity.
             bool shouldMove = hasMotionInput && !_sitToggled && !_sitTransitionPlaying;
             bool shouldAttackIdle = !shouldMove && attackToggleActive && !_sitToggled && !_sitTransitionPlaying;
             bool shouldSitIdle = _sitToggled && !_sitTransitionPlaying;
             string desiredMoveAction = externalMove
                 ? _externalMoveAction
-                : ResolveDesiredMoveAction(forwardPressed, backwardPressed, strafeLeftPressed, strafeRightPressed);
-            bool jumpBusy = UpdateJumpTransitions(forwardPressed, shouldMove, jumpPressedThisFrame);
+                : hasMotionInput
+                    ? ResolveDesiredMoveAction(forwardPressed, backwardPressed, strafeLeftPressed, strafeRightPressed)
+                    : _activeMoveAction;
+            bool jumpBusy = UpdateJumpTransitions(forwardPressed, jumpPressedThisFrame);
             if (jumpBusy)
             {
                 shouldMove = false;
@@ -1444,6 +1551,33 @@ namespace AO.Unity.World
             }
             bool attackCycleAllowed = attackToggleActive && !_sitToggled && !_sitTransitionPlaying && !jumpBusy;
             UpdateAttackCombatSequence(attackCycleAllowed, shouldMove);
+
+            if (directAnim != null)
+            {
+                // CAT sit transitions are one-shots. Do not let the locomotion
+                // update replace sit-start/sit-stop before their callback runs.
+                if (_sitTransitionPlaying || _jumpInAir)
+                    return;
+
+                // Keep current locomotion beneath the landing overlay.
+                // This lets idle->run and run->idle changes take effect immediately
+                // instead of leaving the character gliding in a landing/run pose.
+                if (_jumpLandingTransitionPlaying)
+                {
+                    directAnim.Play(ResolveDirectLocomotionLogicalName(
+                        forwardPressed, backwardPressed,
+                        strafeLeftPressed, strafeRightPressed));
+                    return;
+                }
+
+                string logical = shouldSitIdle
+                    ? "idle-sit"
+                    : ResolveDirectLocomotionLogicalName(
+                        forwardPressed, backwardPressed,
+                        strafeLeftPressed, strafeRightPressed);
+                directAnim.Play(logical);
+                return;
+            }
 
             if (shouldMove && !string.Equals(desiredMoveAction, _activeMoveAction, StringComparison.OrdinalIgnoreCase))
             {
@@ -1508,7 +1642,7 @@ namespace AO.Unity.World
                         _moveLegacyClipName = desiredMoveClip;
                         if (_legacyAnimation.GetClip(_moveLegacyClipName) != null)
                         {
-                            _legacyAnimation.CrossFade(_moveLegacyClipName, 0.08f);
+                            _legacyAnimation.CrossFade(_moveLegacyClipName, 0.20f);
                             SeekLegacyMoveLoopStart();
                             _legacyMovePlaying = true;
                             _legacyStartPlaying = false;
@@ -1521,14 +1655,14 @@ namespace AO.Unity.World
                             && !string.IsNullOrWhiteSpace(_moveStartLegacyClipName)
                             && _legacyAnimation.GetClip(_moveStartLegacyClipName) != null)
                         {
-                            _legacyAnimation.CrossFade(_moveStartLegacyClipName, 0.08f);
+                            _legacyAnimation.CrossFade(_moveStartLegacyClipName, 0.20f);
                             _legacyStartPlaying = true;
                             var startClip = _legacyAnimation.GetClip(_moveStartLegacyClipName);
                             _legacyStartEndTime = Time.time + Mathf.Max(0.05f, startClip.length * 0.95f);
                         }
                         else if (!string.IsNullOrWhiteSpace(_moveLegacyClipName))
                         {
-                            _legacyAnimation.CrossFade(_moveLegacyClipName, 0.12f);
+                            _legacyAnimation.CrossFade(_moveLegacyClipName, 0.20f);
                             SeekLegacyMoveLoopStart();
                             _legacyMovePlaying = true;
                         }
@@ -1539,7 +1673,7 @@ namespace AO.Unity.World
                         && (!string.IsNullOrWhiteSpace(_moveLegacyClipName))
                         && (Time.time >= _legacyStartEndTime || !_legacyAnimation.IsPlaying(_moveStartLegacyClipName)))
                     {
-                        _legacyAnimation.CrossFade(_moveLegacyClipName, 0.10f);
+                        _legacyAnimation.CrossFade(_moveLegacyClipName, 0.20f);
                         SeekLegacyMoveLoopStart();
                         _legacyStartPlaying = false;
                         _legacyMovePlaying = true;
@@ -1576,7 +1710,7 @@ namespace AO.Unity.World
                                 st.speed = 1f;
                         }
                         if (_legacyMovePlaying || _legacyStartPlaying || _legacyAttackPlaying)
-                            _legacyAnimation.CrossFade(_idleLegacyClipName, 0.12f);
+                            _legacyAnimation.CrossFade(_idleLegacyClipName, 0.20f);
                         _legacyAttackPlaying = false;
                     }
                     _legacyStartPlaying = false;
@@ -1598,12 +1732,7 @@ namespace AO.Unity.World
                 _animationMixer.SetInputWeight(2, 1f);
                 return;
             }
-            if (shouldMove && !attackOneShotPlaying)
-            {
-                _moveBlendWeight = 1f;
-                _attackBlendWeight = 0f;
-            }
-            else if (attackToggleActive && !shouldSitIdle && !_sitTransitionPlaying && !jumpBusy)
+            if (attackToggleActive && !shouldSitIdle && !_sitTransitionPlaying && !jumpBusy)
             {
                 _moveBlendWeight = 0f;
                 _attackBlendWeight = 1f;
@@ -2099,6 +2228,16 @@ namespace AO.Unity.World
             if (TryBindLegacyAnimationFromResources(_currentMeshResourceName) && TryInitializeLegacyAnimation())
                 return;
 
+            // Direct CAT meshes animate from AO's CATAnim records and intentionally
+            // have no Unity AnimatorController or legacy Animation component.
+            CatAnimPlayer directAnim = _spawnedPrefabVisual
+                .GetComponentInChildren<CatAnimPlayer>(true);
+            if (directAnim != null)
+            {
+                directAnim.PlayDeferred("idle");
+                return;
+            }
+
             _spawnedAnimator = _spawnedPrefabVisual.GetComponentInChildren<Animator>(true);
             if (_spawnedAnimator == null || _spawnedAnimator.runtimeAnimatorController == null)
             {
@@ -2443,6 +2582,33 @@ namespace AO.Unity.World
             _externalMoveUntil = Time.time + 0.35f;
         }
 
+        /// <summary>
+        /// Drives the direct AO CAT visual from the same input sample used by the
+        /// character motor. This keeps presentation deterministic even when Unity's
+        /// component/LateUpdate ordering differs between the preview and world player.
+        /// </summary>
+        public void SetLocalLocomotionIntent(float forward, float strafe)
+        {
+            _localLocomotionForward = forward;
+            _localLocomotionStrafe = strafe;
+            _localLocomotionIntentFrame = Time.frameCount;
+
+            if (_spawnedPrefabVisual == null || _sitToggled || _sitTransitionPlaying
+                || _jumpInAir || _jumpLandingTransitionPlaying)
+                return;
+
+            CatAnimPlayer directAnim = _spawnedPrefabVisual
+                .GetComponentInChildren<CatAnimPlayer>(true);
+            if (directAnim == null)
+                return;
+
+            directAnim.Play(ResolveDirectLocomotionLogicalName(
+                forward > 0.001f,
+                forward < -0.001f,
+                strafe < -0.001f,
+                strafe > 0.001f), CatAnimPlayer.DefaultBlendSeconds);
+        }
+
         public void SetTemporaryLocomotionClipOverride(string preferredClipName)
         {
             if (string.IsNullOrWhiteSpace(preferredClipName))
@@ -2593,6 +2759,10 @@ namespace AO.Unity.World
                     return matched;
             }
 
+            var semantic = FindSemanticLocomotionNameMatch(availableNames, actionKey);
+            if (!string.IsNullOrWhiteSpace(semantic))
+                return semantic;
+
             var direct = FindBestNameMatch(availableNames, actionKey);
             if (!string.IsNullOrWhiteSpace(direct))
                 return direct;
@@ -2621,7 +2791,62 @@ namespace AO.Unity.World
                     return matched;
             }
 
+            string semanticName = FindSemanticLocomotionNameMatch(
+                availableClips?.Where(clip => clip != null).Select(clip => clip.name),
+                actionKey);
+            if (!string.IsNullOrWhiteSpace(semanticName))
+            {
+                AnimationClip semanticClip = availableClips.FirstOrDefault(clip =>
+                    clip != null && string.Equals(
+                        clip.name, semanticName, StringComparison.OrdinalIgnoreCase));
+                if (semanticClip != null)
+                    return semanticClip;
+            }
+
             return fallback;
+        }
+
+        private static string FindSemanticLocomotionNameMatch(
+            IEnumerable<string> availableNames, string actionKey)
+        {
+            if (availableNames == null || string.IsNullOrWhiteSpace(actionKey))
+                return null;
+
+            string[] aliases;
+            if (string.Equals(actionKey, ActionRunBackwards, StringComparison.OrdinalIgnoreCase))
+                aliases = new[] { "run-back", "run_back", "run-backwards", "run_backwards" };
+            else if (string.Equals(actionKey, ActionStrafeLeft, StringComparison.OrdinalIgnoreCase))
+                aliases = new[] { "walk-left", "walk_left", "strafe-left", "strafe_left" };
+            else if (string.Equals(actionKey, ActionStrafeRight, StringComparison.OrdinalIgnoreCase))
+                aliases = new[] { "walk-right", "walk_right", "strafe-right", "strafe_right" };
+            else if (string.Equals(actionKey, ActionWalk, StringComparison.OrdinalIgnoreCase))
+                aliases = new[] { "_walk_", "-walk-", "walk-stand", "walk_stand" };
+            else if (string.Equals(actionKey, ActionRun, StringComparison.OrdinalIgnoreCase))
+                aliases = new[] { "_run_", "-run-", "run-stand", "run_stand" };
+            else
+                return null;
+
+            var names = availableNames
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToList();
+            bool forwardLocomotion =
+                string.Equals(actionKey, ActionRun, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(actionKey, ActionWalk, StringComparison.OrdinalIgnoreCase);
+            foreach (string alias in aliases)
+            {
+                string match = names.FirstOrDefault(name =>
+                    name.IndexOf(alias, StringComparison.OrdinalIgnoreCase) >= 0
+                    && (!forwardLocomotion
+                        || (name.IndexOf("back", StringComparison.OrdinalIgnoreCase) < 0
+                            && name.IndexOf("left", StringComparison.OrdinalIgnoreCase) < 0
+                            && name.IndexOf("right", StringComparison.OrdinalIgnoreCase) < 0
+                            && name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) < 0
+                            && name.IndexOf("land", StringComparison.OrdinalIgnoreCase) < 0)));
+                if (!string.IsNullOrWhiteSpace(match))
+                    return match;
+            }
+
+            return null;
         }
 
         private static string FindBestNameMatch(IEnumerable<string> availableNames, string desired)
@@ -3763,6 +3988,26 @@ namespace AO.Unity.World
             return ActionRun;
         }
 
+        private string ResolveDirectLocomotionLogicalName(
+            bool forwardPressed,
+            bool backwardPressed,
+            bool strafeLeftPressed,
+            bool strafeRightPressed)
+        {
+            // Match AO locomotion priority. Strafe changes the movement
+            // vector, but forward/backward owns the animation when axes are combined.
+            if (forwardPressed)
+                return _walkModeEnabled ? "walk" : "run";
+            if (backwardPressed)
+                return _walkModeEnabled ? "walk-back" : "run-back";
+            // The rendered CAT root is mirrored on X, so swap visual strafe poses.
+            if (strafeLeftPressed)
+                return "walk-right";
+            if (strafeRightPressed)
+                return "walk-left";
+            return "idle";
+        }
+
         private void HandleWalkToggleInput()
         {
             if (WasBackspacePressedThisFrame())
@@ -3775,6 +4020,31 @@ namespace AO.Unity.World
 
         private void StartSitTransition(string actionKey, bool standingUp)
         {
+            CatAnimPlayer directAnim = _spawnedPrefabVisual != null
+                ? _spawnedPrefabVisual.GetComponentInChildren<CatAnimPlayer>(true)
+                : null;
+            if (directAnim != null)
+            {
+                _sitTransitionPlaying = true;
+                _standingUpTransition = standingUp;
+                string logical = standingUp ? "sit-stop" : "sit-start";
+                bool started = directAnim.PlayOnce(logical, CatAnimPlayer.DefaultBlendSeconds, () =>
+                {
+                    _sitTransitionPlaying = false;
+                    _standingUpTransition = false;
+                    directAnim.Play(standingUp ? "idle" : "idle-sit",
+                        CatAnimPlayer.DefaultBlendSeconds);
+                });
+                if (!started)
+                {
+                    _sitTransitionPlaying = false;
+                    _standingUpTransition = false;
+                    directAnim.Play(standingUp ? "idle" : "idle-sit",
+                        CatAnimPlayer.DefaultBlendSeconds);
+                }
+                return;
+            }
+
             string clipName = ResolveActionClipNameFromMap(availableAnimationClipNames, actionKey, string.Empty);
             if (string.IsNullOrWhiteSpace(clipName))
             {
@@ -3996,14 +4266,18 @@ namespace AO.Unity.World
             float speed = 0f;
             Vector3 current = transform.position;
             if (_hasLastRootPosition && Time.deltaTime > 0.0001f)
-                speed = (current - _lastRootPosition).magnitude / Time.deltaTime;
+            {
+                Vector3 delta = current - _lastRootPosition;
+                delta.y = 0f;
+                speed = delta.magnitude / Time.deltaTime;
+            }
 
             _lastRootPosition = current;
             _hasLastRootPosition = true;
             return speed;
         }
 
-        private bool UpdateJumpTransitions(bool forwardPressed, bool currentlyMoving, bool jumpPressedThisFrame)
+        private bool UpdateJumpTransitions(bool forwardPressed, bool jumpPressedThisFrame)
         {
             if (_characterController == null)
                 _characterController = GetComponent<CharacterController>();
@@ -4012,10 +4286,7 @@ namespace AO.Unity.World
                 // Fallback path for scenes where CharacterController is absent or not ready.
                 if (jumpPressedThisFrame && !_sitToggled && !_sitTransitionPlaying)
                 {
-                    bool forwardIntent = forwardPressed
-                        || currentlyMoving
-                        || string.Equals(_activeMoveAction, ActionRun, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(_activeMoveAction, ActionWalk, StringComparison.OrdinalIgnoreCase);
+                    bool forwardIntent = forwardPressed;
                     string jumpAction = forwardIntent ? ActionJumpForward : ActionJumpFromIdle;
                     float duration = PlayActionAsOneShot(jumpAction);
                     _jumpInAir = true;
@@ -4041,15 +4312,15 @@ namespace AO.Unity.World
             // transitions are delayed or skipped for a frame.
             if (grounded && !_jumpInAir && !_jumpLandingTransitionPlaying && jumpPressedThisFrame)
             {
-                bool forwardIntent = forwardPressed || currentlyMoving;
+                bool forwardIntent = forwardPressed;
                 _pendingJumpActionKey = forwardIntent ? ActionJumpForward : ActionJumpFromIdle;
                 _jumpStartedWithForwardIntent = forwardIntent;
                 _jumpInAir = false;
                 _jumpLandingTransitionPlaying = false;
-                // Keep intent latched through takeoff so real jump input still drives
-                // airborne transition logic, while slope/hill takeoffs (no key press)
-                // remain ignored.
-                _jumpForwardIntentLatched = true;
+                // Preserve the direction present at the jump key edge. The timestamp
+                // below distinguishes a real jump from slope micro-airtime; this flag
+                // only chooses jump-forward versus jump-stand.
+                _jumpForwardIntentLatched = forwardIntent;
                 _restoreAttackPoseAfterJump = attackToggleActive && !_sitToggled && !_sitTransitionPlaying;
             }
 
@@ -4070,7 +4341,7 @@ namespace AO.Unity.World
                     _jumpInAir = true;
                     _jumpLandingTransitionPlaying = false;
                     _restoreAttackPoseAfterJump = attackToggleActive && !_sitToggled && !_sitTransitionPlaying;
-                    bool movingAtTakeoff = forwardPressed || currentlyMoving;
+                    bool movingAtTakeoff = _jumpForwardIntentLatched || forwardPressed;
                     string jumpAction = string.IsNullOrWhiteSpace(_pendingJumpActionKey)
                         ? (movingAtTakeoff ? ActionJumpForward : ActionJumpFromIdle)
                         : _pendingJumpActionKey;
@@ -4086,7 +4357,12 @@ namespace AO.Unity.World
             {
                 _jumpInAir = false;
                 _jumpLandingTransitionPlaying = true;
-                string landAction = _jumpPlayedForwardAction ? ActionLandAfterJumpRun : ActionLandAfterJump;
+                // Landing is selected from current touchdown intent,
+                // not the direction that was held at takeoff.
+                bool forwardAtLanding = _localLocomotionForward > 0.001f;
+                string landAction = forwardAtLanding
+                    ? ActionLandAfterJumpRun
+                    : ActionLandAfterJump;
                 float duration = PlayActionAsOneShot(landAction);
                 _jumpTransitionEndTime = Time.time + Mathf.Max(0.08f, duration);
                 _jumpStartedWithForwardIntent = false;
@@ -4124,6 +4400,40 @@ namespace AO.Unity.World
 
         private float PlayActionAsOneShot(string actionKey)
         {
+            CatAnimPlayer directAnim = _spawnedPrefabVisual != null
+                ? _spawnedPrefabVisual.GetComponentInChildren<CatAnimPlayer>(true)
+                : null;
+            if (directAnim != null)
+            {
+                string logical = actionKey switch
+                {
+                    ActionJumpForward => "jump-forward",
+                    ActionJumpFromIdle => "jump-stand",
+                    ActionLandAfterJumpRun => "jump-land-run",
+                    ActionLandAfterJump => "jump-land-idle",
+                    _ => actionKey
+                };
+                bool isLanding = string.Equals(actionKey, ActionLandAfterJump,
+                        StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(actionKey, ActionLandAfterJumpRun,
+                        StringComparison.OrdinalIgnoreCase);
+                if (isLanding)
+                {
+                    directAnim.Play(ResolveDirectLocomotionLogicalName(
+                        _localLocomotionForward > 0.001f,
+                        _localLocomotionForward < -0.001f,
+                        _localLocomotionStrafe < -0.001f,
+                        _localLocomotionStrafe > 0.001f));
+                    if (directAnim.PlayOverlayOnce(
+                            logical, CatAnimPlayer.DefaultBlendSeconds, null))
+                        return Mathf.Max(0.08f, directAnim.OverlayDuration);
+                }
+                else if (directAnim.PlayOnce(logical, CatAnimPlayer.DefaultBlendSeconds, null))
+                {
+                    return Mathf.Max(0.08f, directAnim.Duration);
+                }
+            }
+
             string clipName = ResolveActionClipNameFromMap(availableAnimationClipNames, actionKey, string.Empty);
             bool isJumpAction = string.Equals(actionKey, ActionJumpForward, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(actionKey, ActionJumpFromIdle, StringComparison.OrdinalIgnoreCase);
@@ -4524,11 +4834,24 @@ namespace AO.Unity.World
             return string.Empty;
         }
 
-        private bool TryPlayOneShotClipByName(string requestedClipName, out float duration)
+        public bool TryPlayOneShotClipByName(string requestedClipName, out float duration)
         {
             duration = 0f;
             if (string.IsNullOrWhiteSpace(requestedClipName))
                 return false;
+
+            if (_spawnedPrefabVisual != null)
+            {
+                CatAnimPlayer directAnim = _spawnedPrefabVisual
+                    .GetComponentInChildren<CatAnimPlayer>(true);
+                if (directAnim != null
+                    && directAnim.PlayOnce(
+                        requestedClipName, CatAnimPlayer.DefaultBlendSeconds, null))
+                {
+                    duration = Mathf.Max(0.08f, directAnim.Duration);
+                    return true;
+                }
+            }
 
             // Resolve against a freshly-collected clip list to avoid stale mapping races.
             var currentClipNames = CollectAvailableClipNames();
@@ -4630,6 +4953,23 @@ namespace AO.Unity.World
             }
 
             return false;
+        }
+
+        public bool TryPlayOneShotOverlayByName(string requestedClipName, out float duration)
+        {
+            duration = 0f;
+            if (string.IsNullOrWhiteSpace(requestedClipName) || _spawnedPrefabVisual == null)
+                return false;
+
+            CatAnimPlayer directAnim = _spawnedPrefabVisual
+                .GetComponentInChildren<CatAnimPlayer>(true);
+            if (directAnim == null
+                || !directAnim.PlayOverlayOnce(
+                    requestedClipName, CatAnimPlayer.DefaultBlendSeconds, null))
+                return false;
+
+            duration = Mathf.Max(0.08f, directAnim.OverlayDuration);
+            return true;
         }
 
         public void SetExternalAttackCyclePaused(bool paused)
@@ -4904,6 +5244,8 @@ namespace AO.Unity.World
                 else
                 {
                     string meshPath = ResolveItemMeshPath(meshKey);
+                    if (string.IsNullOrWhiteSpace(meshPath) || !File.Exists(meshPath))
+                        meshPath = await AOCharacterMeshResolver.ResolveAsync(meshKey);
                     meshPath = GlbDataUriLoadPathResolver.Resolve(meshPath, true);
                     if (string.IsNullOrWhiteSpace(meshPath))
                     {
@@ -4931,6 +5273,7 @@ namespace AO.Unity.World
 
                 ClearDebugHeadVisual();
                 _debugHeadVisual = nextVisual;
+                _debugHeadVisual.SetActive(_characterVisualsVisible);
                 _debugHeadVisualImporter = importer;
                 _debugHeadMeshKey = meshKey;
                 importer = null;
@@ -4966,6 +5309,20 @@ namespace AO.Unity.World
             if (_debugHeadVisual == null)
                 return;
 
+            Transform authoredAttractor = FindAuthoredHeadAttractor();
+            if (authoredAttractor != null)
+            {
+                if (_debugHeadVisual.transform.parent != authoredAttractor)
+                    _debugHeadVisual.transform.SetParent(authoredAttractor, false);
+
+                // AO authored this attachment completely. Legacy preview offsets and
+                // bounds corrections were compensating for the missing attractor.
+                _debugHeadVisual.transform.localPosition = Vector3.zero;
+                _debugHeadVisual.transform.localRotation = Quaternion.identity;
+                _debugHeadVisual.transform.localScale = Vector3.one;
+                return;
+            }
+
             Transform anchor = FindHeadAnchor();
             if (anchor == null)
                 return;
@@ -4978,45 +5335,48 @@ namespace AO.Unity.World
                 _debugHeadVisual.transform.rotation *= Quaternion.Euler(extraEuler);
             }
 
-            var renderer = _debugHeadVisual.GetComponentInChildren<Renderer>(true);
             Vector3 basePosition = anchor.position + anchor.TransformVector(debugHeadLocalPosition);
-            if (renderer == null)
-            {
-                _debugHeadVisual.transform.position = basePosition;
-                return;
-            }
-
             _debugHeadVisual.transform.position = basePosition;
 
-            // Align a neck-height sample point (not bounds min) to the head anchor for more
-            // stable cross-head placement. Bounds-min anchoring is too sensitive to chin/hair variance.
-            float anchorNormalizedY = Mathf.Clamp01(debugHeadAnchorNormalizedY);
-            if (!string.IsNullOrWhiteSpace(_debugHeadMeshKey)
-                && _debugHeadMeshKey.StartsWith("head_opifexfemale", StringComparison.OrdinalIgnoreCase))
+            // ABIFF head origins are not authored at the neck seam. Align the bottom of
+            // the face renderer (not hair, which may extend downward) to the skeleton
+            // head anchor. A percentage of total height buried some face variants.
+            var renderers = _debugHeadVisual.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length > 0)
             {
-                anchorNormalizedY = Mathf.Clamp01(opifexFemaleHeadAnchorNormalizedY);
-            }
-            if (!string.IsNullOrWhiteSpace(_debugHeadMeshKey)
-                && _headPreviewAnchorYByMeshKey.TryGetValue(_debugHeadMeshKey, out var meshSpecificAnchorY))
-            {
-                anchorNormalizedY = Mathf.Clamp01(meshSpecificAnchorY);
-            }
+                Renderer faceRenderer = renderers.FirstOrDefault(renderer =>
+                    renderer != null
+                    && renderer.name.IndexOf("head", StringComparison.OrdinalIgnoreCase) >= 0)
+                    ?? renderers[0];
+                Bounds combined = faceRenderer.bounds;
+                _debugHeadVisual.transform.position += Vector3.up
+                    * (basePosition.y - combined.min.y);
 
-            Bounds bounds = renderer.bounds;
-            float sampledY = Mathf.Lerp(bounds.min.y, bounds.max.y, anchorNormalizedY);
-            float verticalOffset = basePosition.y - sampledY;
-            _debugHeadVisual.transform.position += Vector3.up * verticalOffset;
-
-            // Keep the head horizontally centered on the anchor after the vertical seat adjustment.
-            bounds = renderer.bounds;
-            Vector3 centerOffset = bounds.center - _debugHeadVisual.transform.position;
-            _debugHeadVisual.transform.position -= new Vector3(centerOffset.x, 0f, centerOffset.z);
+                combined = faceRenderer.bounds;
+                Vector3 centerOffset = combined.center - _debugHeadVisual.transform.position;
+                _debugHeadVisual.transform.position -= new Vector3(centerOffset.x, 0f, centerOffset.z);
+            }
 
             if (!string.IsNullOrWhiteSpace(_debugHeadMeshKey)
                 && _headPreviewOffsetByMeshKey.TryGetValue(_debugHeadMeshKey, out var extraOffset))
             {
                 _debugHeadVisual.transform.position += anchor.TransformVector(extraOffset);
             }
+        }
+
+        private Transform FindAuthoredHeadAttractor()
+        {
+            if (_spawnedPrefabVisual == null)
+                return null;
+
+            foreach (Transform candidate in _spawnedPrefabVisual.GetComponentsInChildren<Transform>(true))
+            {
+                if (candidate != null
+                    && candidate.name.StartsWith(
+                        "AOAttractor_Attractor01_head", StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+            }
+            return null;
         }
 
         private void LoadHeadPreviewOffsets()

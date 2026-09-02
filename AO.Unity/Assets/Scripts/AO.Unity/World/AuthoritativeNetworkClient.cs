@@ -19,6 +19,8 @@ namespace AO.Unity.World
         private static AuthoritativeNetworkClient _activeInstance;
         public readonly record struct CharacterSettingsApproval(int Level, int BreedId, int ProfessionId, int Sex, long Experience, string Message);
         public readonly record struct StatIncreaseApproval(string StatName, int Amount, int AvailableIp, string Message);
+        public readonly record struct AuthoritativeStatsSnapshot(
+            IReadOnlyDictionary<int, int> Stats, int Sex);
         public readonly record struct EquipApproval(int SlotId, long InstanceId, string Message);
         public readonly record struct UnequipApproval(int SlotId, long InstanceId, string Message);
         public readonly record struct AdminItemGrantedApproval(long InstanceId, string Message);
@@ -127,6 +129,19 @@ namespace AO.Unity.World
             public int Nano;
             public int MaxNano;
             public long Experience;
+            public int AvailableIp;
+            public int BreedId;
+            public int ProfessionId;
+            public int Level;
+            public int Sex;
+            public StatValueSnapshot[] Stats;
+        }
+
+        [Serializable]
+        private sealed class StatValueSnapshot
+        {
+            public int StatId;
+            public int Value;
         }
 
         [Serializable]
@@ -275,6 +290,7 @@ namespace AO.Unity.World
         private int _messagesSent;
         private int _messagesReceived;
         private int _lastReceivedTick;
+        private int _lastStatsSnapshotSignature;
         private bool _isConnecting;
         private float _nextReconnectTime;
         private Transform _runtimeEntitiesRoot;
@@ -315,9 +331,11 @@ namespace AO.Unity.World
         private string _lastRuntimeAttackEntityId = string.Empty;
         private float _lastRuntimeAttackRequestAt = -999f;
         private float _nextTemporaryEntityExpiryScanAt;
+        private AOGameServerSession _gameServerSession;
 
         public event Action<CharacterSettingsApproval> CharacterSettingsApplied;
         public event Action<StatIncreaseApproval> StatIncreaseApplied;
+        public event Action<AuthoritativeStatsSnapshot> AuthoritativeStatsApplied;
         public event Action<EquipApproval> EquipApplied;
         public event Action<UnequipApproval> UnequipApplied;
         public event Action<AdminItemGrantedApproval> AdminItemGranted;
@@ -820,13 +838,18 @@ namespace AO.Unity.World
                 return;
             }
 
+            if (_gameServerSession == null)
+                _gameServerSession = FindFirstObjectByType<AOGameServerSession>();
+
+            string displayName = _gameServerSession?.ServerDisplayName ?? $"{serverHost}:{serverPort}";
+            string endpoint = _gameServerSession?.ServerEndpoint ?? $"{serverHost}:{serverPort}";
+            string state = _gameServerSession?.ConnectionState ?? _connectionState;
             GUI.Box(
                 expandedRect,
-                "AO Server\n" +
-                $"State: {_connectionState}\n" +
-                $"Session: {(string.IsNullOrWhiteSpace(_sessionId) ? "<none>" : _sessionId)}\n" +
-                $"Sent: {_messagesSent}  Received: {_messagesReceived}  LastTick: {_lastReceivedTick}\n" +
-                $"Last: {_lastServerMessage}");
+                $"{displayName}\n" +
+                $"State: {state}\n" +
+                $"Endpoint: {endpoint}\n" +
+                $"Sent: {_messagesSent}  Received: {_messagesReceived}  LastTick: {_lastReceivedTick}");
             if (GUI.Button(new Rect(expandedRect.xMax - 26f, expandedRect.y + 4f, 20f, 18f), "▾"))
                 collapseDebugOverlay = true;
         }
@@ -973,6 +996,7 @@ namespace AO.Unity.World
                 else if (string.Equals(message.Type, "world_state", StringComparison.OrdinalIgnoreCase))
                 {
                     TryRecoverSessionIdFromSnapshot(message);
+                    PublishLocalAuthoritativeStats(message);
                     ApplyRuntimeSnapshotFromWorldStateIfNeeded(message);
                     HandleRuntimeEntityDelta(message);
                     ReconcileRuntimeEntitiesFromWorldState(message);
@@ -1198,6 +1222,49 @@ namespace AO.Unity.World
                 _connectionState = $"Receiving world state (backlog {_incoming.Count})";
         }
 
+        private void PublishLocalAuthoritativeStats(ServerMessage message)
+        {
+            if (message?.Players == null || message.Players.Length == 0
+                || string.IsNullOrWhiteSpace(_sessionId))
+                return;
+
+            PlayerSnapshot local = message.Players.FirstOrDefault(player =>
+                player != null && string.Equals(
+                    player.SessionId, _sessionId, StringComparison.OrdinalIgnoreCase));
+            if (local == null)
+                return;
+            // Keep publishing on later world-state ticks until the UI/context has
+            // subscribed; startup order differs between bootstrap paths.
+            if (AuthoritativeStatsApplied == null)
+                return;
+
+            var values = new Dictionary<int, int>();
+            if (local.Stats != null)
+            {
+                for (int i = 0; i < local.Stats.Length; i++)
+                {
+                    StatValueSnapshot stat = local.Stats[i];
+                    if (stat != null && stat.StatId >= 0)
+                        values[stat.StatId] = stat.Value;
+                }
+            }
+
+            values[53] = Mathf.Max(0, local.AvailableIp);
+            values[54] = Mathf.Max(1, local.Level);
+            values[4] = Mathf.Max(1, local.BreedId);
+            values[60] = Mathf.Max(1, local.ProfessionId);
+            int signature = 17;
+            foreach (var pair in values.OrderBy(pair => pair.Key))
+                signature = unchecked(signature * 31 + pair.Key * 397 ^ pair.Value);
+            signature = unchecked(signature * 31 + local.Sex);
+            if (signature == _lastStatsSnapshotSignature)
+                return;
+
+            _lastStatsSnapshotSignature = signature;
+            AuthoritativeStatsApplied?.Invoke(
+                new AuthoritativeStatsSnapshot(values, local.Sex));
+        }
+
         private bool ShouldLogServerError(string message)
         {
             if (string.IsNullOrWhiteSpace(message))
@@ -1385,8 +1452,7 @@ namespace AO.Unity.World
         {
             if (message?.Players == null || string.IsNullOrWhiteSpace(_sessionId))
                 return;
-            if (Time.unscaledTime < _suppressSnapshotPositionUntilTime)
-                return;
+            bool suppressPosition = Time.unscaledTime < _suppressSnapshotPositionUntilTime;
 
             int activePlayfieldId = _bootstrap != null ? _bootstrap.ActivePlayfieldId : 0;
             for (int i = 0; i < message.Players.Length; i++)
@@ -1397,8 +1463,11 @@ namespace AO.Unity.World
                 if (activePlayfieldId > 0 && player.PlayfieldId > 0 && player.PlayfieldId != activePlayfieldId)
                     continue;
 
-                _authoritativePosition = new Vector3(player.X, player.Y, player.Z);
-                _hasAuthoritativePosition = true;
+                if (!suppressPosition)
+                {
+                    _authoritativePosition = new Vector3(player.X, player.Y, player.Z);
+                    _hasAuthoritativePosition = true;
+                }
                 _authoritativeHealth = player.Health;
                 _authoritativeMaxHealth = player.MaxHealth;
                 _authoritativeNano = player.Nano;

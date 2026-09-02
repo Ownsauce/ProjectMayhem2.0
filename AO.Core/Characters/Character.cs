@@ -76,6 +76,43 @@ namespace AO.Core.Characters
 
         public void AddIp(int amount) => AvailableIp += System.Math.Max(0, amount);
 
+        public void ApplyAuthoritativeStats(IReadOnlyDictionary<int, int> values,
+            Func<int, string> statNameResolver = null)
+        {
+            if (values == null)
+                return;
+
+            foreach (var pair in values)
+            {
+                int value = pair.Value;
+                StatsContainer.SetBaseStat(pair.Key, value);
+                string statName = statNameResolver?.Invoke(pair.Key);
+                if (!string.IsNullOrWhiteSpace(statName))
+                {
+                    if (!Stats.TryGetValue(statName, out var stat))
+                        Stats[statName] = new CharacterStat(statName, value);
+                    else
+                        stat.SetValue(value);
+                }
+            }
+
+            if (values.TryGetValue(53, out int ip)) AvailableIp = System.Math.Max(0, ip);
+            if (values.TryGetValue(54, out int level)) Level.SetLevel(level);
+            if (values.TryGetValue(52, out int xp))
+            {
+                Level.SetTotalExperience(System.Math.Max(0, xp));
+                int previousThreshold = values.TryGetValue(57, out int lastXp)
+                    ? System.Math.Max(0, lastXp)
+                    : 0;
+                Level.SetExperience(System.Math.Max(0, xp - previousThreshold));
+            }
+            if (values.TryGetValue(4, out int breed) && breed > 0) BreedId = breed;
+            if (values.TryGetValue(60, out int profession) && profession > 0) ProfessionId = profession;
+            SyncStatContext();
+            StatsContainer.Recalculate();
+            RecalculateDerivedStats();
+        }
+
         public int GetCurrentTitleLevel()
         {
             return GetTitleLevelForLevel != null
@@ -380,6 +417,19 @@ namespace AO.Core.Characters
             StatsContainer.Recalculate();
             RecalculateDerivedStats();
             return true;
+        }
+
+        /// <summary>
+        /// Replaces locally cached equipment with a server-authoritative snapshot and
+        /// refreshes every stat surface that depends on worn items.
+        /// </summary>
+        public void ApplyAuthoritativeEquipment(IReadOnlyDictionary<int, long> equipped)
+        {
+            Equipment.ApplyAuthoritative(equipped);
+            _aggregator.Rebuild(Equipment.GetAllEquipped());
+            SyncStatContext();
+            StatsContainer.Recalculate();
+            RecalculateDerivedStats();
         }
 
         private void SyncStatContext()

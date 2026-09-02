@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <StartupObject>AORebirthLoginProbe</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="AO.Client.AORebirth.LoginProbe.cs" />
+    <ProjectReference Include="../AO.Client/AO.Client.csproj" />
+  </ItemGroup>
+</Project>

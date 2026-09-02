@@ -128,7 +128,6 @@ namespace AO.Unity.Prototype
         private AOStyleUiFactory.WindowRefs _ncuWindow;
         private AOStyleUiFactory.WindowRefs _characterSettingsWindow;
         private AOStyleUiFactory.WindowRefs _teleportWindow;
-        private AOStyleUiFactory.WindowRefs _statusWindow;
         private AOStyleUiFactory.WindowRefs _questEditorWindow;
         private AOStyleUiFactory.WindowRefs _npcDialogWindow;
         private AOStyleUiFactory.WindowRefs _lookAtWindow;
@@ -197,6 +196,7 @@ namespace AO.Unity.Prototype
         private ActiveNanoCast _activeNanoCast;
         private RectTransform _characterSelectionRoot;
         private CharacterSelectionWindowView _characterSelectionView;
+        private AOGameServerSession _gameServerSession;
         private bool _characterFlowActive;
         private bool _savedWalkerEnabled = true;
         private GameObject _characterCreatePreviewRoot;
@@ -225,6 +225,7 @@ namespace AO.Unity.Prototype
             var canvas = canvasGo.AddComponent<Canvas>();
             _uiCanvas = canvas;
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.pixelPerfect = true;
             var scaler = canvasGo.AddComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1600f, 900f);
@@ -330,24 +331,13 @@ namespace AO.Unity.Prototype
             _ncuWindow.Content.gameObject.AddComponent<NcuWindowView>().Initialize(_context, font);
             _ncuWindow.Root.gameObject.SetActive(false);
 
-            _statusWindow = AOStyleUiFactory.CreateWindow(body, font, "Status", new Vector2(0f, 0f), new Vector2(1f, 0f));
-            _statusWindow.Root.pivot = new Vector2(0.5f, 0f);
-            _statusWindow.Root.anchoredPosition = new Vector2(0f, -2f);
-            _statusWindow.Root.sizeDelta = new Vector2(780f, 38f);
-            if (_statusWindow.ResizeHandle != null)
-            {
-                _statusWindow.ResizeHandle.MinSize = new Vector2(320f, 38f);
-                _statusWindow.ResizeHandle.MaxSize = new Vector2(1200f, 120f);
-            }
-            _statusWindow.Content.gameObject.AddComponent<StatusWindowView>().Initialize(_context, font);
-            _statusWindow.Root.SetAsFirstSibling();
             BuildQuickInfoBar(body, font);
 
             _chatWindow = AOStyleUiFactory.CreateWindow(body, font, "Chat / Damage", new Vector2(0f, 0f), new Vector2(0f, 0f));
             ConfigureWindowFrame(_chatWindow, new Vector2(520f, 240f), new Vector2(10f, 46f), new Vector2(360f, 180f));
             _chatWindow.Root.pivot = new Vector2(0f, 0f);
             _chatWindow.Root.anchoredPosition = new Vector2(10f, 46f);
-            _chatWindow.Content.gameObject.AddComponent<ChatDamageWindowView>().Initialize(font, body);
+            _chatWindow.Content.gameObject.AddComponent<ChatDamageWindowView>().Initialize(_context, font, body);
 
             _npcDialogWindow = AOStyleUiFactory.CreateWindow(body, font, "Dialog", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
             ConfigureWindowFrame(_npcDialogWindow, new Vector2(640f, 360f), new Vector2(0f, 0f), new Vector2(420f, 260f), new Vector2(980f, 640f));
@@ -401,6 +391,18 @@ namespace AO.Unity.Prototype
             }
             _f10Window.Root.gameObject.SetActive(false);
 
+            // Unity Editor reserves F10 for its native menu on some platforms.
+            // Keep settings reachable without relying on the keyboard shortcut.
+            var settingsButton = AOStyleUiFactory.CreateButton(
+                "OpenSettingsButton", root, "Settings", font,
+                ToggleF10WindowWithUnsavedCheck, 92f);
+            var settingsButtonRt = (RectTransform)settingsButton.transform;
+            settingsButtonRt.anchorMin = new Vector2(1f, 1f);
+            settingsButtonRt.anchorMax = new Vector2(1f, 1f);
+            settingsButtonRt.pivot = new Vector2(1f, 1f);
+            settingsButtonRt.anchoredPosition = new Vector2(-12f, -12f);
+            settingsButtonRt.sizeDelta = new Vector2(92f, 26f);
+
             RegisterPersistedWindow("item_browser", _itemBrowserWindow);
             RegisterPersistedWindow("inventory", _inventoryWindow);
             RegisterPersistedWindow("backpack", _backpackWindow);
@@ -411,7 +413,6 @@ namespace AO.Unity.Prototype
             RegisterPersistedWindow("ncu", _ncuWindow);
             RegisterPersistedWindow("character_settings", _characterSettingsWindow);
             RegisterPersistedWindow("teleport", _teleportWindow);
-            RegisterPersistedWindow("status", _statusWindow);
             RegisterPersistedWindow("chat_damage", _chatWindow);
             RegisterPersistedWindow("npc_dialog", _npcDialogWindow);
             RegisterPersistedWindow("look_at", _lookAtWindow);
@@ -474,7 +475,6 @@ namespace AO.Unity.Prototype
             ClampWindow(_skillsWindow, body);
             ClampWindow(_programsWindow, body);
             ClampWindow(_ncuWindow, body);
-            ClampWindow(_statusWindow, body);
             ClampWindow(_chatWindow, body);
             ClampWindow(_npcDialogWindow, body);
             ClampWindow(_f10Window, body);
@@ -583,6 +583,11 @@ namespace AO.Unity.Prototype
             }
             if (_context != null)
                 _context.StateChanged -= OnContextStateChanged;
+            if (_gameServerSession != null)
+            {
+                _gameServerSession.InventoryChanged -= HandleServerInventoryChanged;
+                _gameServerSession.CharacterStateChanged -= HandleServerCharacterStateChanged;
+            }
         }
 
         private void OnApplicationQuit()
@@ -610,6 +615,8 @@ namespace AO.Unity.Prototype
 
         private void Update()
         {
+            HandleConnectionSetupTabNavigation();
+            TickCharacterSelectionCarousel();
             if (_characterFlowActive)
                 return;
 
@@ -1902,7 +1909,9 @@ namespace AO.Unity.Prototype
 
             for (int i = 0; i < candidates.Length; i++)
             {
-                if (appearance.TryPlayOneShotAction(candidates[i], out float duration))
+                if (appearance.TryPlayOneShotOverlayByName(candidates[i], out float duration)
+                    || appearance.TryPlayOneShotClipByName(candidates[i], out duration)
+                    || appearance.TryPlayOneShotAction(candidates[i], out duration))
                     return duration;
             }
 
@@ -1934,7 +1943,9 @@ namespace AO.Unity.Prototype
 
             for (int i = 0; i < candidates.Length; i++)
             {
-                if (appearance.TryPlayOneShotAction(candidates[i], out float duration))
+                if (appearance.TryPlayOneShotOverlayByName(candidates[i], out float duration)
+                    || appearance.TryPlayOneShotClipByName(candidates[i], out duration)
+                    || appearance.TryPlayOneShotAction(candidates[i], out duration))
                     return duration;
             }
 
@@ -1966,7 +1977,9 @@ namespace AO.Unity.Prototype
 
             for (int i = 0; i < candidates.Length; i++)
             {
-                if (appearance.TryPlayOneShotAction(candidates[i], out _))
+                if (appearance.TryPlayOneShotOverlayByName(candidates[i], out _)
+                    || appearance.TryPlayOneShotClipByName(candidates[i], out _)
+                    || appearance.TryPlayOneShotAction(candidates[i], out _))
                     return;
             }
         }
@@ -2369,14 +2382,11 @@ namespace AO.Unity.Prototype
                     _worldNameplatesByBridgeId[id] = text;
                 }
 
-                if (!_worldNameplateYOffsetByBridgeId.TryGetValue(id, out float yOffset))
-                {
-                    yOffset = 2.1f;
-                    var renderer = bridge.GetComponentInChildren<Renderer>();
-                    if (renderer != null)
-                        yOffset = Mathf.Max(2.1f, renderer.bounds.extents.y + 0.5f);
-                    _worldNameplateYOffsetByBridgeId[id] = yOffset;
-                }
+                float yOffset = 2.1f;
+                var renderer = bridge.GetComponentInChildren<Renderer>();
+                if (renderer != null)
+                    yOffset = Mathf.Max(2.1f, renderer.bounds.max.y - bridge.transform.position.y + 0.3f);
+                _worldNameplateYOffsetByBridgeId[id] = yOffset;
                 Vector3 worldAnchor = bridge.transform.position + Vector3.up * yOffset;
                 text.transform.localPosition = new Vector3(0f, yOffset, 0f);
                 Vector3 screen = Camera.main.WorldToScreenPoint(worldAnchor);
@@ -2440,7 +2450,6 @@ namespace AO.Unity.Prototype
                    || IsBlockingWindowAt(_ncuWindow, screenPoint)
                    || IsBlockingWindowAt(_characterSettingsWindow, screenPoint)
                    || IsBlockingWindowAt(_teleportWindow, screenPoint)
-                   || IsBlockingWindowAt(_statusWindow, screenPoint)
                    || IsBlockingWindowAt(_questEditorWindow, screenPoint)
                    || IsBlockingWindowAt(_f10Window, screenPoint)
                    || IsBlockingWindowAt(_chatWindow, screenPoint);

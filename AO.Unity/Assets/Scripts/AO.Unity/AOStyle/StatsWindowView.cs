@@ -194,6 +194,15 @@ namespace AO.Unity.AOStyle
                 xpMax = (int)Mathf.Clamp(_context.Character.GetExperienceToNextLevel(), 0, int.MaxValue);
             }
 
+            int serverXp = _context.Character.StatsContainer.GetBaseStat(StatIds.XP);
+            int serverLastXp = _context.Character.StatsContainer.GetBaseStat(StatIds.LastXP);
+            int serverNextXp = _context.Character.StatsContainer.GetBaseStat(StatIds.NextXP);
+            if (serverNextXp > serverLastXp && serverXp >= serverLastXp)
+            {
+                xpCurrent = Mathf.Max(0, serverXp - serverLastXp);
+                xpMax = Mathf.Max(1, serverNextXp - serverLastXp);
+            }
+
             if (_context.TryGetAuthoritativeStats(out _, out _, out _, out _, out long authoritativeExperience))
             {
                 xpCurrent = (int)Mathf.Clamp(authoritativeExperience, 0, int.MaxValue);

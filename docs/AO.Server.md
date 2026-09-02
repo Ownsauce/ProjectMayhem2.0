@@ -2,7 +2,11 @@
 
 ## Purpose
 
-`AO.Server` is the authoritative runtime. It should own validation, accepted state changes, and the simulation tick that decides what is true.
+`AO.Server` is Project Mayhem's existing authoritative runtime. It owns
+validation, accepted state changes, and simulation when this backend is in use.
+In the 2.0 multi-backend client architecture it also serves as a controllable
+mock/test server; it is not assumed to be the authority when connected to the
+live service, Ithaca, or AORebirth.
 
 ## Owns
 
@@ -81,6 +85,8 @@ Some world bootstrap and content-loading behavior is still client-heavy in `AO.U
 
 ## AI Guidance
 
-- New validation and orchestration logic should land here first unless it is a pure shared gameplay rule.
+- New validation and orchestration specific to the Project Mayhem backend should land here unless it is a pure shared gameplay rule.
 - Keep transport-agnostic logic separate from actual sockets or RPC libraries when possible.
 - Treat the Unity client as untrusted for final gameplay outcomes.
+- Do not make Unity or `AO.Client` depend on this backend's JSON messages; expose
+  them through the same stable client-domain interface used by other adapters.

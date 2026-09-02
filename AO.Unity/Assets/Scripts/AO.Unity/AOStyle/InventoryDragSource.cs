@@ -202,6 +202,18 @@ namespace AO.Unity.AOStyle
             if (eventData.button != PointerEventData.InputButton.Left)
                 return;
 
+            // AO's quick right-click remains the default action. Also support the
+            // familiar double-left-click without sacrificing single-click pickup.
+            if (eventData.clickCount >= 2)
+            {
+                InventoryDragSource.ForceEndDragVisual();
+                if (Zone == PrototypeUiContext.SlotZone.Inventory)
+                    Context.SelectInventorySlot(SlotIndex);
+                else
+                    Context.SelectBackpackSlot(SlotIndex);
+                return;
+            }
+
             if (ItemDragPayload.IsDragging && ItemDragPayload.InstanceId != 0)
             {
                 bool moved = ItemDragPayload.FromEquipment

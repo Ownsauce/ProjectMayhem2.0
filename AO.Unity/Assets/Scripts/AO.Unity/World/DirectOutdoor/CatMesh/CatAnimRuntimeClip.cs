@@ -1,0 +1,317 @@
+using System.Collections.Generic;
+using AODB.Common.RDBObjects;
+using UnityEngine;
+using AoQuaternion = AODB.Common.Structs.Quaternion;
+using AoVector3 = AODB.Common.Structs.Vector3;
+
+public sealed class CatAnimRuntimeClip
+{
+    public readonly int AnimId;
+    public readonly string Name;
+    public readonly float SourceDuration;
+    public readonly float LoopStart;
+    public readonly float LoopEnd;
+    public readonly float Duration;
+    public readonly bool HasLoopTiming;
+    public readonly BoneTrack[] Tracks;
+
+    public struct BoneTrack
+    {
+        public int BoneIndex;
+        public Vector3Key[] Positions;
+        public QuaternionKey[] Rotations;
+    }
+
+    public struct Vector3Key
+    {
+        public float Time;
+        public Vector3 Value;
+    }
+
+    public struct QuaternionKey
+    {
+        public float Time;
+        public Quaternion Value;
+    }
+
+    CatAnimRuntimeClip(
+        int animId,
+        string name,
+        float sourceDuration,
+        float loopStart,
+        float loopEnd,
+        bool hasLoopTiming,
+        BoneTrack[] tracks)
+    {
+        AnimId = animId;
+        Name = name;
+        SourceDuration = sourceDuration;
+        LoopStart = loopStart;
+        LoopEnd = loopEnd;
+        HasLoopTiming = hasLoopTiming;
+        Duration = Mathf.Max(loopEnd - loopStart, 0.001f);
+        Tracks = tracks;
+    }
+
+    /// <summary>
+    /// One-shots play the authored prefix (0 → loopstart) when loop markers exist,
+    /// otherwise the full source clip. Looping playback still uses <see cref="Duration"/>.
+    /// </summary>
+    public float GetOneShotDuration()
+    {
+        if (HasLoopTiming && LoopStart > 0.001f)
+            return Mathf.Min(LoopStart, SourceDuration);
+
+        return SourceDuration;
+    }
+
+    public static CatAnimRuntimeClip Create(
+        CATAnim catAnim,
+        int animId,
+        int boneCount)
+    {
+        if (catAnim?.Animation.BoneData == null || boneCount <= 0)
+            return null;
+
+        List<BoneData> boneDataList = catAnim.Animation.BoneData;
+        var tracks = new List<BoneTrack>(boneDataList.Count);
+        float sourceDuration = 0f;
+
+        for (int i = 0; i < boneDataList.Count; i++)
+        {
+            BoneData boneData = boneDataList[i];
+            int boneIndex = boneData.BoneId;
+            if (boneIndex < 0 || boneIndex >= boneCount)
+                continue;
+
+            Vector3Key[] positions = BuildPositionKeys(boneData.TranslationKeys, ref sourceDuration);
+            QuaternionKey[] rotations = BuildRotationKeys(boneData.RotationKeys, ref sourceDuration);
+            if ((positions == null || positions.Length == 0) && (rotations == null || rotations.Length == 0))
+                continue;
+
+            tracks.Add(new BoneTrack
+            {
+                BoneIndex = boneIndex,
+                Positions = positions,
+                Rotations = rotations
+            });
+        }
+
+        if (tracks.Count == 0)
+            return null;
+
+        sourceDuration = Mathf.Max(sourceDuration, 0.001f);
+
+        float loopStart = 0f;
+        float loopEnd = sourceDuration;
+        bool hasLoopTiming = false;
+        // Read these authored markers from CATAnim.AnimationIdentifiers.
+        // Project Mayhem's older AODB DLL contains the data but omitted the helper.
+        if (CatAnimLoopTiming.TryGetLoopTiming(catAnim, out int loopStartMs, out int loopEndMs)
+            && loopEndMs > loopStartMs)
+        {
+            loopStart = ToSeconds(loopStartMs);
+            loopEnd = ToSeconds(loopEndMs);
+            hasLoopTiming = true;
+        }
+
+        ClampLoop(sourceDuration, ref loopStart, ref loopEnd);
+
+        string name = BuildName(catAnim.Name, animId);
+        return new CatAnimRuntimeClip(
+            animId,
+            name,
+            sourceDuration,
+            loopStart,
+            loopEnd,
+            hasLoopTiming,
+            tracks.ToArray());
+    }
+
+    public void Evaluate(int boneIndex, float time, out Vector3? localPosition, out Quaternion? localRotation)
+        => Evaluate(boneIndex, time, absoluteSourceTime: false, out localPosition, out localRotation);
+
+    public void Evaluate(
+        int boneIndex,
+        float time,
+        bool absoluteSourceTime,
+        out Vector3? localPosition,
+        out Quaternion? localRotation)
+    {
+        localPosition = null;
+        localRotation = null;
+
+        float sourceTime = absoluteSourceTime ? time : LoopStart + time;
+
+        for (int i = 0; i < Tracks.Length; i++)
+        {
+            BoneTrack track = Tracks[i];
+            if (track.BoneIndex != boneIndex)
+                continue;
+
+            if (track.Positions != null && track.Positions.Length > 0)
+                localPosition = SamplePosition(track.Positions, sourceTime);
+
+            if (track.Rotations != null && track.Rotations.Length > 0)
+                localRotation = SampleRotation(track.Rotations, sourceTime);
+
+            return;
+        }
+    }
+
+    static void ClampLoop(float sourceDuration, ref float loopStart, ref float loopEnd)
+    {
+        loopStart = Mathf.Clamp(loopStart, 0f, sourceDuration);
+        loopEnd = Mathf.Clamp(loopEnd, 0f, sourceDuration);
+
+        if (loopEnd > loopStart + 0.001f)
+            return;
+
+        loopStart = 0f;
+        loopEnd = sourceDuration;
+    }
+
+    static Vector3Key[] BuildPositionKeys(List<TranslationKey> keys, ref float duration)
+    {
+        if (keys == null || keys.Count == 0)
+            return null;
+
+        var result = new Vector3Key[keys.Count];
+        for (int i = 0; i < keys.Count; i++)
+        {
+            float time = ToSeconds(keys[i].Time);
+            AoVector3 pos = keys[i].Position;
+            result[i] = new Vector3Key
+            {
+                Time = time,
+                Value = new Vector3(pos.X, pos.Y, pos.Z)
+            };
+            if (time > duration)
+                duration = time;
+        }
+
+        return result;
+    }
+
+    static QuaternionKey[] BuildRotationKeys(List<RotationKey> keys, ref float duration)
+    {
+        if (keys == null || keys.Count == 0)
+            return null;
+
+        var result = new QuaternionKey[keys.Count];
+        for (int i = 0; i < keys.Count; i++)
+        {
+            float time = ToSeconds(keys[i].Time);
+            AoQuaternion rot = keys[i].Rotation;
+            result[i] = new QuaternionKey
+            {
+                Time = time,
+                Value = new Quaternion(rot.X, rot.Y, rot.Z, rot.W)
+            };
+            if (time > duration)
+                duration = time;
+        }
+
+        return result;
+    }
+
+    static float ToSeconds(float rawTime) => rawTime / 1000f;
+
+    static Vector3 SamplePosition(Vector3Key[] keys, float time)
+    {
+        if (keys.Length == 1)
+            return keys[0].Value;
+
+        if (time <= keys[0].Time)
+            return keys[0].Value;
+
+        if (time >= keys[keys.Length - 1].Time)
+            return keys[keys.Length - 1].Value;
+
+        for (int i = 0; i < keys.Length - 1; i++)
+        {
+            Vector3Key a = keys[i];
+            Vector3Key b = keys[i + 1];
+            if (time > b.Time)
+                continue;
+
+            float span = Mathf.Max(b.Time - a.Time, 1e-6f);
+            float t = (time - a.Time) / span;
+            return Vector3.LerpUnclamped(a.Value, b.Value, t);
+        }
+
+        return keys[keys.Length - 1].Value;
+    }
+
+    static Quaternion SampleRotation(QuaternionKey[] keys, float time)
+    {
+        if (keys.Length == 1)
+            return keys[0].Value;
+
+        if (time <= keys[0].Time)
+            return keys[0].Value;
+
+        if (time >= keys[keys.Length - 1].Time)
+            return keys[keys.Length - 1].Value;
+
+        for (int i = 0; i < keys.Length - 1; i++)
+        {
+            QuaternionKey a = keys[i];
+            QuaternionKey b = keys[i + 1];
+            if (time > b.Time)
+                continue;
+
+            float span = Mathf.Max(b.Time - a.Time, 1e-6f);
+            float t = (time - a.Time) / span;
+            return Quaternion.SlerpUnclamped(a.Value, b.Value, t);
+        }
+
+        return keys[keys.Length - 1].Value;
+    }
+
+    static string BuildName(string catAnimName, int animId)
+    {
+        if (string.IsNullOrEmpty(catAnimName))
+            return $"anim_{animId}";
+
+        string trimmed = catAnimName.Trim().Trim('\0');
+        if (trimmed.EndsWith(".ani", System.StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed.Substring(0, trimmed.Length - 4);
+
+        return string.IsNullOrEmpty(trimmed) ? $"anim_{animId}" : $"{trimmed}_{animId}";
+    }
+}
+
+public static class CatAnimLoopTiming
+{
+    public static bool TryGetLoopTiming(CATAnim animation, out int loopStartMs, out int loopEndMs)
+    {
+        loopStartMs = 0;
+        loopEndMs = 0;
+        if (animation?.AnimationIdentifiers == null)
+            return false;
+
+        bool foundStart = false;
+        bool foundEnd = false;
+        for (int i = 0; i < animation.AnimationIdentifiers.Length; i++)
+        {
+            AnimationIdentifier identifier = animation.AnimationIdentifiers[i];
+            if (!foundStart && string.Equals(identifier.Name, "loopstart",
+                    System.StringComparison.OrdinalIgnoreCase))
+            {
+                loopStartMs = identifier.Type;
+                foundStart = true;
+            }
+            else if (!foundEnd && string.Equals(identifier.Name, "loopend",
+                         System.StringComparison.OrdinalIgnoreCase))
+            {
+                loopEndMs = identifier.Type;
+                foundEnd = true;
+            }
+
+            if (foundStart && foundEnd)
+                return true;
+        }
+        return false;
+    }
+}

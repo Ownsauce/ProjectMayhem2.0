@@ -296,7 +296,14 @@ namespace AO.Unity.AOStyle
         {
             var raw = LoadRawSlots("weapon_slots.json");
             if (raw == null || raw.Count == 0)
-                return Empty;
+            {
+                raw = CreateRawSlots(
+                    (1, "HUD 1"), (15, "HUD 2"), (2, "HUD 3"),
+                    (3, "Utils 1"), (4, "Utils 2"), (5, "Utils 3"),
+                    (6, "Right Hand"), (7, "Belt"), (8, "Left Hand"),
+                    (9, "NCU 1"), (10, "NCU 2"), (11, "NCU 3"),
+                    (12, "NCU 4"), (13, "NCU 5"), (14, "NCU 6"));
+            }
 
             // Preserve AO-like panel flow with Hud2 near other HUD slots.
             var order = new Dictionary<int, int>
@@ -308,14 +315,14 @@ namespace AO.Unity.AOStyle
                 [4] = 4,   // Utils2
                 [5] = 5,   // Utils3
                 [6] = 6,   // RightHand
-                [7] = 7,   // Deck
+                [7] = 7,   // Belt
                 [8] = 8,   // LeftHand
-                [9] = 9,   // Deck1
-                [10] = 10, // Deck2
-                [11] = 11, // Deck3
-                [12] = 12, // Deck4
-                [13] = 13, // Deck5
-                [14] = 14, // Deck6
+                [9] = 9,   // NCU1
+                [10] = 10, // NCU2
+                [11] = 11, // NCU3
+                [12] = 12, // NCU4
+                [13] = 13, // NCU5
+                [14] = 14, // NCU6
             };
 
             return raw
@@ -352,7 +359,14 @@ namespace AO.Unity.AOStyle
         {
             var raw = LoadRawSlots("implant_slots.json");
             if (raw == null || raw.Count == 0)
-                return Empty;
+            {
+                raw = CreateRawSlots(
+                    (1, "Eye"), (2, "Head"), (3, "Ear"),
+                    (4, "RightArm"), (5, "Chest"), (6, "LeftArm"),
+                    (7, "RightWrist"), (8, "Waist"), (9, "LeftWrist"),
+                    (10, "RightHand"), (11, "Legs"), (12, "LeftHand"),
+                    (13, "Feet"));
+            }
 
             var ordered = raw
                 .Where(slot => slot.Id > 0 && slot.Id <= 13)
@@ -381,7 +395,7 @@ namespace AO.Unity.AOStyle
         {
             var raw = LoadRawSlots("armor_slots.json");
             if (raw == null || raw.Count == 0)
-                return Empty;
+                raw = CreateCanonicalArmorSlots();
 
             // Exact AO armor tab layout:
             // Neck, Head, Back
@@ -412,9 +426,9 @@ namespace AO.Unity.AOStyle
 
         private IReadOnlyList<WearSlotDef> LoadSocialSlots()
         {
-            var raw = LoadRawSlots("armor_slots.json");
+            var raw = LoadRawSlots("social_slots.json");
             if (raw == null || raw.Count == 0)
-                return Empty;
+                raw = CreateCanonicalArmorSlots();
 
             var list = new List<WearSlotDef>();
             foreach (var slot in raw.Where(slot => slot.Id > 0 && slot.Id <= 15).OrderBy(slot => slot.Id))
@@ -440,6 +454,23 @@ namespace AO.Unity.AOStyle
             }
 
             return list;
+        }
+
+        private static List<RawSlotDef> CreateCanonicalArmorSlots()
+        {
+            return CreateRawSlots(
+                (1, "Neck"), (2, "Head"), (3, "Back"),
+                (4, "RightShoulder"), (5, "Chest"), (6, "LeftShoulder"),
+                (7, "RightArm"), (8, "Hands"), (9, "LeftArm"),
+                (10, "RightWrist"), (11, "Legs"), (12, "LeftWrist"),
+                (13, "RightFinger"), (14, "Feet"), (15, "LeftFinger"));
+        }
+
+        private static List<RawSlotDef> CreateRawSlots(params (int Id, string Name)[] slots)
+        {
+            return slots
+                .Select(slot => new RawSlotDef { Id = slot.Id, Name = slot.Name })
+                .ToList();
         }
 
         private static List<RawSlotDef> LoadRawSlots(string fileName)

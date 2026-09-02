@@ -7,10 +7,13 @@ using Newtonsoft.Json;
 using AO.Core.Characters;
 using AO.Core.Stats;
 using AO.Core.Items;
+using AO.Client.World;
 using AO.Data.Unity;
 using AO.Unity.Quests;
 using AO.Unity.World;
 using AO.Unity.AOStyle;
+using AO.Unity.Assets;
+using AO.Assets.ResourceDatabase;
 using UnityEngine;
 using DataItemInstance = AO.Data.Core.ItemInstance;
 
@@ -70,6 +73,9 @@ namespace AO.Unity.Prototype
             public int IconId;
             public long SourceCrystalInstanceId;
             public int SourceCrystalDefinitionId;
+            public string SchoolTab;
+            public int FallbackNcuCost;
+            public int FallbackDurationSeconds;
         }
 
         public sealed class ActiveNanoProgram
@@ -120,8 +126,8 @@ namespace AO.Unity.Prototype
         private const int DefaultMaxNcuCapacity = 8;
         private const int DurationStatId = 8;
         private const int MaxNcuStatId = 181;
-        private const int NcuCostStatId = 551;
-        private const int NcuCostStatIdPrimary = 54;
+        private const int NcuCostStatId = 54; // Legacy nano records store cost in Level.
+        private const int NcuCostStatIdPrimary = 1004;
         private const int NanoCostStatId = 407;
         private const int NanoSchoolStatId = 405;
         private const int AttackDelayStatId = 294;
@@ -269,6 +275,7 @@ namespace AO.Unity.Prototype
             {
                 _networkClient.CharacterSettingsApplied += HandleAuthoritativeCharacterSettingsApplied;
                 _networkClient.StatIncreaseApplied += HandleAuthoritativeStatIncreaseApplied;
+                _networkClient.AuthoritativeStatsApplied += HandleAuthoritativeStatsApplied;
                 _networkClient.EquipApplied += HandleAuthoritativeEquipApplied;
                 _networkClient.UnequipApplied += HandleAuthoritativeUnequipApplied;
                 _networkClient.AdminItemGranted += HandleAuthoritativeAdminItemGranted;
@@ -402,6 +409,156 @@ namespace AO.Unity.Prototype
 
             Character.Inventory.TrySetMainSlot(0, core);
             SetStatus($"Starter backpack loaded in inventory: {firstBackpack.Definition.Name}");
+        }
+
+        public void ApplyServerInventory(InventorySnapshot snapshot)
+        {
+            if (snapshot == null || !snapshot.IsMainInventory || Character?.Inventory == null)
+                return;
+
+            for (int slot = 0; slot < Character.Inventory.Main.Capacity; slot++)
+                Character.Inventory.TryRemoveFromMain(slot, out _);
+            Character.Inventory.Items.Clear();
+
+            int loaded = 0;
+            foreach (InventoryEntrySnapshot entry in snapshot.Entries)
+            {
+                if (entry == null)
+                    continue;
+                // AO's main inventory page is wire-addressed as slots 0x40..0x5D.
+                int guiSlot = entry.Slot >= 0x40 ? entry.Slot - 0x40 : entry.Slot;
+                if (guiSlot < 0 || guiSlot >= Character.Inventory.Main.Capacity)
+                    continue;
+                int aoid = entry.HighId > 0 ? entry.HighId : entry.LowId;
+                // Resolve the exact server-supplied low/high template pair and QL
+                // directly from the selected AO client's ResourceDatabase.
+                try
+                {
+                    if (AOItemObjectResolver.TryResolve(
+                        entry.LowId, entry.HighId, entry.Quality,
+                        out AO.Data.Core.Item resolved))
+                    {
+                        AODataManager.Instance.RegisterRuntimeItem(
+                            resolved, entry.LowId, entry.HighId);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning($"[Inventory] RDB item resolution failed for low={entry.LowId} "
+                        + $"high={entry.HighId} ql={entry.Quality}: {exception.Message}");
+                }
+                var definition = AODataManager.Instance.GetCoreDefinition(aoid)
+                    ?? AODataManager.Instance.GetCoreDefinition(entry.LowId);
+                if (definition == null)
+                {
+                    Debug.LogWarning($"[Inventory] Unknown server item low={entry.LowId} high={entry.HighId} ql={entry.Quality}.");
+                    continue;
+                }
+                long instanceId = entry.IdentityInstance != 0
+                    ? entry.IdentityInstance
+                    : ((long)aoid << 16) | (uint)guiSlot;
+                int containerCapacity = AODataManager.Instance.GetCoreInstance(definition.AOID)?.ContainerCapacity ?? 0;
+                AODataManager.Instance.RegisterRuntimeInstance(
+                    definition, instanceId, entry.Quantity, containerCapacity);
+                var item = new ItemInstance(definition, entry.Quantity, instanceId, containerCapacity);
+                if (Character.Inventory.TrySetMainSlot(guiSlot, item))
+                    loaded++;
+            }
+            OpenBackpackId = 0;
+            NotifyStateChanged();
+            SetStatus($"Server inventory synchronized: {loaded}/{snapshot.Capacity} slots.");
+        }
+
+        public void ApplyServerCharacterState(CharacterStateSnapshot snapshot)
+        {
+            if (snapshot == null || Character == null)
+                return;
+
+            if (snapshot.IsStatUpdateOnly)
+            {
+                Character.ApplyAuthoritativeStats(snapshot.Stats,
+                    statId => AODataManager.Instance?.GetStatName(statId));
+                NotifyStateChanged();
+                return;
+            }
+
+            var equipped = new Dictionary<int, long>();
+            _socialEquipped.Clear();
+            int resolvedCount = 0;
+            foreach (InventoryEntrySnapshot entry in snapshot.Slots)
+            {
+                if (entry == null || entry.Slot < 0x01 || entry.Slot > 0x3f)
+                    continue;
+                int aoid = entry.HighId > 0 ? entry.HighId : entry.LowId;
+                try
+                {
+                    if (AOItemObjectResolver.TryResolve(entry.LowId, entry.HighId,
+                        entry.Quality, out AO.Data.Core.Item resolved))
+                    {
+                        AODataManager.Instance.RegisterRuntimeItem(
+                            resolved, entry.LowId, entry.HighId);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning($"[Equipment] RDB resolution failed for slot 0x{entry.Slot:X2}: "
+                        + exception.Message);
+                }
+                var definition = AODataManager.Instance.GetCoreDefinition(aoid)
+                    ?? AODataManager.Instance.GetCoreDefinition(entry.LowId);
+                if (definition == null)
+                    continue;
+                long instanceId = entry.IdentityInstance != 0
+                    ? entry.IdentityInstance
+                    : ((long)aoid << 16) | (uint)entry.Slot;
+                int containerCapacity = AODataManager.Instance
+                    .GetCoreInstance(definition.AOID)?.ContainerCapacity ?? 0;
+                AODataManager.Instance.RegisterRuntimeInstance(
+                    definition, instanceId, entry.Quantity, containerCapacity);
+                if (entry.Slot >= 0x31)
+                    _socialEquipped[entry.Slot - 0x30 + SocialSlotOffset] = instanceId;
+                else
+                    equipped[NormalizeServerWearSlot(entry.Slot)] = instanceId;
+                resolvedCount++;
+            }
+            Character.ApplyAuthoritativeEquipment(equipped);
+            Character.ApplyAuthoritativeStats(snapshot.Stats,
+                statId => AODataManager.Instance?.GetStatName(statId));
+            ApplyServerUploadedPrograms(snapshot.UploadedNanoIds);
+            NotifyStateChanged();
+            SetStatus($"Server character state synchronized: {resolvedCount} worn items, "
+                + $"{_uploadedPrograms.Count} uploaded programs, {snapshot.Stats.Count} stats. "
+                + $"IP={Character.AvailableIp}, HP={Character.StatsContainer.GetBaseStat(StatIds.Health)}/"
+                + $"{Character.StatsContainer.GetBaseStat(StatIds.MaxHealth)}, "
+                + $"Nano={Character.StatsContainer.GetBaseStat(StatIds.CurrentNano)}/"
+                + $"{Character.StatsContainer.GetBaseStat(StatIds.MaxNanoEnergy)}.");
+        }
+
+        private static int NormalizeServerWearSlot(int placement)
+        {
+            if (placement >= 0x21 && placement <= 0x2f)
+                return 100 + (placement - 0x20);
+            if (placement >= 0x11 && placement <= 0x1f)
+                return MapArmorSlotToLocal(placement - 0x10);
+            if (placement >= 0x01 && placement <= 0x0f)
+                return MapWeaponSlotToLocal(placement);
+            return placement;
+        }
+
+        private void ApplyServerUploadedPrograms(IReadOnlyList<int> nanoIds)
+        {
+            _uploadedPrograms.Clear();
+            _uploadedProgramIds.Clear();
+            if (nanoIds == null)
+                return;
+            foreach (int nanoId in nanoIds)
+            {
+                if (nanoId <= 0 || !_uploadedProgramIds.Add(nanoId))
+                    continue;
+                UploadedNanoProgram uploaded = BuildUploadedProgram(nanoId, null, null);
+                if (uploaded != null)
+                    _uploadedPrograms.Add(uploaded);
+            }
         }
 
         public IEnumerable<DataItemInstance> QueryItems(string token, string qlOperator = "=", int? qlValue = null)
@@ -801,7 +958,7 @@ namespace AO.Unity.Prototype
             var raw = AODataManager.Instance.GetRawItemByAoid(item.Definition?.AOID ?? (int)item.InstanceId);
             if (raw == null)
                 return false;
-            if (TryExtractUploadNanoId(raw, out _))
+            if (IsLikelyNanoUploadItem(raw))
                 return false;
 
             int canFlags = Mathf.Max(0, GetRawStatValue(raw, CanFlagStatId));
@@ -1123,7 +1280,11 @@ namespace AO.Unity.Prototype
             if (primary > 0)
                 return primary;
 
-            return Mathf.Max(0, GetProgramStatValueAcrossChain(nanoId, NcuCostStatId));
+            int legacy = Mathf.Max(0, GetProgramStatValueAcrossChain(nanoId, NcuCostStatId));
+            if (legacy > 0)
+                return legacy;
+
+            return Mathf.Max(0, _uploadedPrograms.FirstOrDefault(p => p != null && p.NanoId == nanoId)?.FallbackNcuCost ?? 0);
         }
 
         public int GetProgramNanoCost(int nanoId)
@@ -1135,7 +1296,7 @@ namespace AO.Unity.Prototype
         {
             int durationRaw = Mathf.Max(0, GetProgramStatValueAcrossChain(nanoId, DurationStatId));
             if (durationRaw <= 0)
-                return 0;
+                return Mathf.Max(0, _uploadedPrograms.FirstOrDefault(p => p != null && p.NanoId == nanoId)?.FallbackDurationSeconds ?? 0);
 
             // AO durations are encoded in centiseconds.
             return Mathf.Max(1, Mathf.CeilToInt(durationRaw / 100f));
@@ -1180,7 +1341,11 @@ namespace AO.Unity.Prototype
         {
             var rawNano = ResolveRawNanoByProgramId(nanoId);
             int schoolRaw = Mathf.Max(0, GetRawStatValue(rawNano, NanoSchoolStatId));
-            return ResolveNanoSchoolTabName(schoolRaw);
+            string resolved = ResolveNanoSchoolTabName(schoolRaw);
+            if (!string.Equals(resolved, "All", StringComparison.OrdinalIgnoreCase))
+                return resolved;
+
+            return _uploadedPrograms.FirstOrDefault(p => p != null && p.NanoId == nanoId)?.SchoolTab ?? "All";
         }
 
         public int GetCurrentNcuFree()
@@ -1404,7 +1569,7 @@ namespace AO.Unity.Prototype
 
             if (rawNcuBonus != 0 && !modifiers.ContainsKey(MaxNcuStatId))
                 modifiers[MaxNcuStatId] = rawNcuBonus;
-            if (durationSeconds > 0 && (ncuCost > 0 || modifiers.Count > 0 || periodicEffects.Count > 0 || visualProfessionOverrideId.HasValue))
+            if (durationSeconds > 0)
             {
                 // Refresh same nano by replacing any existing copy.
                 if (existingIndex >= 0)
@@ -1459,9 +1624,12 @@ namespace AO.Unity.Prototype
             if (TryGetAuthoritativeStats(out int authoritativeHealth, out int authoritativeMaxHealth, out _, out _, out _))
             {
                 int max = Mathf.Max(1, authoritativeMaxHealth + GetActiveProgramModifierSum(MaxHealthStatId));
-                int merged = Mathf.Max(authoritativeHealth, _localHealthCurrent);
-                return Mathf.Clamp(merged, 0, max);
+                return Mathf.Clamp(authoritativeHealth, 0, max);
             }
+
+            int serverStat = Character?.StatsContainer?.GetBaseStat(StatIds.Health) ?? 0;
+            if (Character?.StatsContainer?.HasBaseStat(StatIds.Health) == true)
+                return Mathf.Clamp(serverStat, 0, GetMaxHealthValue());
 
             SyncLocalResourcePools();
             return Mathf.Clamp(_localHealthCurrent, 0, Mathf.Max(1, _localHealthMax));
@@ -1481,9 +1649,12 @@ namespace AO.Unity.Prototype
             if (TryGetAuthoritativeStats(out _, out _, out int authoritativeNano, out int authoritativeMaxNano, out _))
             {
                 int max = Mathf.Max(1, authoritativeMaxNano + GetActiveProgramModifierSum(MaxNanoPoolStatId));
-                int merged = Mathf.Max(authoritativeNano, _localNanoCurrent);
-                return Mathf.Clamp(merged, 0, max);
+                return Mathf.Clamp(authoritativeNano, 0, max);
             }
+
+            int serverStat = Character?.StatsContainer?.GetBaseStat(StatIds.CurrentNano) ?? 0;
+            if (Character?.StatsContainer?.HasBaseStat(StatIds.CurrentNano) == true)
+                return Mathf.Clamp(serverStat, 0, GetMaxNanoValue());
 
             SyncLocalResourcePools();
             return Mathf.Clamp(_localNanoCurrent, 0, Mathf.Max(1, _localNanoMax));
@@ -2642,10 +2813,6 @@ namespace AO.Unity.Prototype
                 { string.Empty, "None" }
             };
 
-            string root = Path.Combine(Application.streamingAssetsPath, "AOData", "ItemMeshes");
-            if (!Directory.Exists(root))
-                return result;
-
             string breedToken = CharacterBreedId switch
             {
                 1 => "solitus",
@@ -2661,7 +2828,10 @@ namespace AO.Unity.Prototype
                 _ => "male"
             };
 
-            foreach (var file in Directory.EnumerateFiles(root, "*.glb"))
+            string root = Path.Combine(Application.streamingAssetsPath, "AOData", "ItemMeshes");
+            foreach (var file in Directory.Exists(root)
+                ? Directory.EnumerateFiles(root, "*.glb")
+                : Enumerable.Empty<string>())
             {
                 string meshKey = Path.GetFileNameWithoutExtension(file);
                 if (string.IsNullOrWhiteSpace(meshKey))
@@ -2675,6 +2845,39 @@ namespace AO.Unity.Prototype
 
                 if (!result.ContainsKey(meshKey))
                     result[meshKey] = meshKey;
+            }
+
+            try
+            {
+                AOInstallValidation install = AOInstallConfiguration.GetConfiguredInstall();
+                if (install != null && install.IsValid)
+                {
+                    string prefix = CharacterBreedId switch
+                    {
+                        1 => "head_solitus" + sexToken,
+                        2 => "head_opifex" + sexToken,
+                        3 => "head_nano" + (CharacterSex == CharacterRuntimeBridge.CharacterSex.Female ? "female" : "male"),
+                        4 => "head_atrox",
+                        _ => string.Empty
+                    };
+                    using (var database = new AOResourceDatabase(install.RootPath))
+                    {
+                        AOResourceCatalog catalog = AOResourceCatalog.Load(database);
+                        foreach (var pair in catalog.GetResources(AOResourceTypes.Mesh))
+                        {
+                            string meshKey = Path.GetFileNameWithoutExtension(pair.Value ?? string.Empty);
+                            if (string.IsNullOrWhiteSpace(prefix)
+                                || !meshKey.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            if (!result.ContainsKey(meshKey))
+                                result[meshKey] = meshKey;
+                        }
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"Could not enumerate AO head meshes: {exception.Message}");
             }
 
             return result;
@@ -2781,7 +2984,8 @@ namespace AO.Unity.Prototype
         public Sprite GetIconForCore(ItemInstance coreItem)
         {
             if (coreItem == null) return null;
-            var data = AODataManager.Instance.GetItemInstance(coreItem.InstanceId);
+            var data = AODataManager.Instance.GetItemInstance(coreItem.InstanceId)
+                ?? AODataManager.Instance.GetItemInstance(coreItem.Definition?.AOID ?? 0);
             return GetIconForData(data);
         }
 
@@ -2792,6 +2996,13 @@ namespace AO.Unity.Prototype
                 return false;
 
             var data = AODataManager.Instance.GetItemInstance(instanceId);
+            if (data?.Definition == null && Character?.Inventory?.Items != null)
+            {
+                ItemInstance runtimeItem = Character.Inventory.Items.FirstOrDefault(
+                    item => item != null && item.InstanceId == instanceId);
+                data = AODataManager.Instance.GetItemInstance(
+                    runtimeItem?.Definition?.AOID ?? 0);
+            }
             if (data?.Definition == null)
                 return false;
 
@@ -2870,14 +3081,32 @@ namespace AO.Unity.Prototype
             if (_missingIconIds.Contains(iconId))
                 return null;
 
-            string path = Path.Combine(Application.streamingAssetsPath, "AOData/Icons", $"{iconId}.png");
-            if (!File.Exists(path))
+            byte[] bytes = null;
+            try
+            {
+                AOItemIconResolver.TryReadIcon(iconId, out bytes);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning($"[Items] Could not read icon {iconId} from the AO database: {exception.Message}");
+            }
+
+            // Retain compatibility with existing development exports, but a
+            // normal configured AO installation no longer needs this folder.
+            if (bytes == null || bytes.Length == 0)
+            {
+                string path = Path.Combine(
+                    Application.streamingAssetsPath, "AOData/Icons", $"{iconId}.png");
+                if (File.Exists(path))
+                    bytes = File.ReadAllBytes(path);
+            }
+
+            if (bytes == null || bytes.Length == 0)
             {
                 _missingIconIds.Add(iconId);
                 return null;
             }
 
-            var bytes = File.ReadAllBytes(path);
             var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
             if (!texture.LoadImage(bytes))
             {
@@ -3613,7 +3842,14 @@ namespace AO.Unity.Prototype
 
             var rawCrystal = AODataManager.Instance.GetRawItemByAoid(dataItem.DefinitionId);
             if (!TryExtractUploadNanoId(rawCrystal, out int nanoId))
+            {
+                if (IsLikelyNanoUploadItem(rawCrystal))
+                {
+                    SetStatus($"Upload failed: could not resolve the program ID for {dataItem.Definition.Name}.");
+                    return true;
+                }
                 return false;
+            }
 
             if (_uploadedProgramIds.Contains(nanoId))
             {
@@ -3692,8 +3928,54 @@ namespace AO.Unity.Prototype
                 Description = description ?? string.Empty,
                 IconId = iconId,
                 SourceCrystalInstanceId = crystalData?.InstanceId ?? 0,
-                SourceCrystalDefinitionId = crystalData?.DefinitionId ?? 0
+                SourceCrystalDefinitionId = crystalData?.DefinitionId ?? 0,
+                SchoolTab = InferNanoSchoolTab(name, description),
+                FallbackNcuCost = ResolveFallbackNanoNcuCost(rawCrystal, name, description),
+                FallbackDurationSeconds = ResolveFallbackNanoDuration(name, description)
             };
+        }
+
+        private static string InferNanoSchoolTab(string name, string description)
+        {
+            string text = $"{name} {description}".ToLowerInvariant();
+            if (ContainsAny(text, "shield", "reflect", "deflect", "barrier", "armor", "armour", "protection", "absorb"))
+                return "Prot";
+            if (ContainsAny(text, "heal", "medical", "health", "treatment", "regeneration", "wound", "life"))
+                return "Medical";
+            if (ContainsAny(text, "grid", "warp", "teleport", "beacon", "summon", "space", "quantum"))
+                return "Space";
+            if (ContainsAny(text, "damage", "weapon", "combat", "attack", "rage", "fury", "nuke", "projectile"))
+                return "Combat";
+            return "Psi";
+        }
+
+        private static int ResolveFallbackNanoNcuCost(AO.Data.Core.Item rawCrystal, string name, string description)
+        {
+            if (ResolveFallbackNanoDuration(name, description) <= 0)
+                return 0;
+            int ql = GetRawStatValue(rawCrystal, 54);
+            return Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1, ql) / 10f), 1, 200);
+        }
+
+        private static int ResolveFallbackNanoDuration(string name, string description)
+        {
+            string text = $"{name} {description}".ToLowerInvariant();
+            bool persistent = ContainsAny(text,
+                "shield", "expertise", "buff", "increase", "surrounds", "protection", "armor", "armour",
+                "reflect", "deflect", "barrier", "regeneration", "enhance", "boost");
+            return persistent ? 3600 : 0;
+        }
+
+        private static bool ContainsAny(string text, params string[] terms)
+        {
+            if (string.IsNullOrWhiteSpace(text) || terms == null)
+                return false;
+            for (int i = 0; i < terms.Length; i++)
+            {
+                if (!string.IsNullOrWhiteSpace(terms[i]) && text.IndexOf(terms[i], StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
         }
 
         private string ResolveNanoDisplayName(int nanoId, AO.Data.Core.Item rawCrystal, DataItemInstance crystalData)
@@ -3864,10 +4146,7 @@ namespace AO.Unity.Prototype
             if (rawCrystal?.SpellData == null)
                 return false;
 
-            string itemName = rawCrystal.Name ?? string.Empty;
-            bool likelyNanoUploadItem =
-                itemName.IndexOf("nano crystal", StringComparison.OrdinalIgnoreCase) >= 0
-                || itemName.IndexOf("instruction disc", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool likelyNanoUploadItem = IsLikelyNanoUploadItem(rawCrystal);
 
             foreach (var group in rawCrystal.SpellData)
             {
@@ -3879,7 +4158,10 @@ namespace AO.Unity.Prototype
                     if (spell == null)
                         continue;
 
-                    if (spell.NanoID > 0 && likelyNanoUploadItem)
+                    // 53019 is AO's upload-nano spell. Prefer structural data over
+                    // display-name formatting from a particular ResourceDatabase.
+                    if (spell.NanoID > 0
+                        && (likelyNanoUploadItem || spell.SpellID == 53019))
                     {
                         nanoId = spell.NanoID;
                         return true;
@@ -5050,6 +5332,23 @@ namespace AO.Unity.Prototype
             }
 
             return false;
+        }
+
+        private static bool IsLikelyNanoUploadItem(AO.Data.Core.Item item)
+        {
+            if (item == null)
+                return false;
+
+            string compactName = Regex.Replace(
+                item.Name ?? string.Empty, @"[\s_-]+", string.Empty);
+            if (compactName.IndexOf("nanocrystal", StringComparison.OrdinalIgnoreCase) >= 0
+                || compactName.IndexOf("instructiondisc", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+
+            if (item.SpellData == null)
+                return false;
+            return item.SpellData.Any(group => group?.Items != null
+                && group.Items.Any(spell => spell != null && spell.SpellID == 53019));
         }
 
         private static bool TryPlayAnimatorClipFallback(GameObject host, Animator animator, AnimationClip clip, out float duration)
@@ -6460,6 +6759,25 @@ namespace AO.Unity.Prototype
                 return;
 
             TryAddCredits(amount);
+            NotifyStateChanged();
+        }
+
+        private void HandleAuthoritativeStatsApplied(
+            AuthoritativeNetworkClient.AuthoritativeStatsSnapshot snapshot)
+        {
+            if (Character == null || snapshot.Stats == null)
+                return;
+
+            Character.ApplyAuthoritativeStats(snapshot.Stats,
+                statId => AODataManager.Instance?.GetStatName(statId));
+            _characterSex = snapshot.Sex switch
+            {
+                1 => CharacterRuntimeBridge.CharacterSex.Uni,
+                3 => CharacterRuntimeBridge.CharacterSex.Female,
+                _ => CharacterRuntimeBridge.CharacterSex.Male
+            };
+            if (_runtimeBridge != null)
+                _runtimeBridge.Sex = _characterSex;
             NotifyStateChanged();
         }
 

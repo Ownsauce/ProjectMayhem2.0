@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>../tmp/dotnet-build/AO.Assets/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>../tmp/dotnet-build/AO.Assets/obj/</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>../tmp/dotnet-build/AO.Assets/obj/</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

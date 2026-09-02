@@ -28,6 +28,7 @@ namespace AO.Unity.AOStyle
 
         public sealed class CharacterProfile
         {
+            public string ServerCharacterId;
             public string Name;
             public int Level;
             public int BreedId;
@@ -156,6 +157,7 @@ namespace AO.Unity.AOStyle
         private Text _statusText;
         private InputField _nameInput;
         private Button _playButton;
+        private Button _editAppearanceButton;
         private Button _createButton;
         private Button _deleteButton;
         private Button _backButton;
@@ -170,6 +172,15 @@ namespace AO.Unity.AOStyle
         private readonly List<string> _headKeys = new();
         private int _selectedHeadIndex;
         private Text _headValueText;
+        private bool _editingExistingProfile;
+
+        public void SetConnectionStatus(string message)
+        {
+            if (_statusText == null)
+                return;
+            _statusText.text = message ?? string.Empty;
+            _statusText.gameObject.SetActive(!string.IsNullOrWhiteSpace(message));
+        }
 
         private static readonly Color AccentPrimary = new(0.23f, 0.87f, 0.95f, 0.95f);
         private static readonly Color AccentPrimarySoft = new(0.23f, 0.87f, 0.95f, 0.35f);
@@ -258,7 +269,6 @@ namespace AO.Unity.AOStyle
             if (_screenState == ScreenState.Select)
             {
                 RebuildSelectionContent();
-                ApplySelectionToPreview();
                 _onSelectionChanged?.Invoke(_selectedProfileIndex);
             }
         }
@@ -392,10 +402,12 @@ namespace AO.Unity.AOStyle
             rightLayout.childAlignment = TextAnchor.MiddleRight;
 
             _backButton = AOStyleUiFactory.CreateButton("Back", leftRow, "Back", _font, () => _onBack?.Invoke(), 110f);
+            _editAppearanceButton = AOStyleUiFactory.CreateButton("EditAppearance", leftRow, "Edit Appearance", _font, StartEditAppearance, 150f);
             _createButton = AOStyleUiFactory.CreateButton("Create", rightRow, "Create Character", _font, StartCreateFlow, 170f);
             _deleteButton = AOStyleUiFactory.CreateButton("Delete", rightRow, "Delete Character", _font, ShowDeleteConfirm, 170f);
             _playButton = AOStyleUiFactory.CreateButton("Play", rightRow, "Play", _font, OnPlayClicked, 110f);
             StyleActionButton(_backButton, false);
+            StyleActionButton(_editAppearanceButton, false);
             StyleActionButton(_createButton, false);
             StyleActionButton(_deleteButton, false);
             StyleActionButton(_playButton, true);
@@ -593,6 +605,7 @@ namespace AO.Unity.AOStyle
 
         private void StartCreateFlow()
         {
+            _editingExistingProfile = false;
             _draft.BreedId = 1;
             _draft.Sex = CharacterRuntimeBridge.CharacterSex.Male;
             _draft.Height = BodyHeightPreset.Medium;
@@ -607,6 +620,46 @@ namespace AO.Unity.AOStyle
             _onPreviewBreedSexChanged?.Invoke(_draft.BreedId, _draft.Sex);
             _onPreviewBodyChanged?.Invoke(_draft.Height, _draft.Weight);
             _onPreviewHeadChanged?.Invoke(_draft.HeadMeshKey);
+        }
+
+        private void StartEditAppearance()
+        {
+            if (_selectedProfileIndex < 0 || _selectedProfileIndex >= _profiles.Count)
+                return;
+
+            CharacterProfile profile = _profiles[_selectedProfileIndex];
+            _editingExistingProfile = true;
+            _draft.BreedId = profile.BreedId;
+            _draft.Sex = profile.Sex;
+            _draft.Height = profile.Height;
+            _draft.Weight = profile.Weight;
+            _draft.ProfessionId = profile.ProfessionId;
+            _draft.ProfessionName = profile.ProfessionName;
+            _draft.Name = profile.Name;
+            string selectedHead = profile.HeadMeshKey ?? string.Empty;
+            RefreshHeadLookupFromCurrentDraft();
+            int selectedIndex = _headKeys.FindIndex(key =>
+                string.Equals(key, selectedHead, StringComparison.OrdinalIgnoreCase));
+            if (selectedIndex >= 0)
+            {
+                _selectedHeadIndex = selectedIndex;
+                _draft.HeadMeshKey = _headKeys[selectedIndex];
+            }
+            ShowBodyStep();
+        }
+
+        private void SaveExistingAppearance()
+        {
+            if (_selectedProfileIndex < 0 || _selectedProfileIndex >= _profiles.Count)
+                return;
+            CharacterProfile profile = _profiles[_selectedProfileIndex];
+            profile.Height = _draft.Height;
+            profile.Weight = _draft.Weight;
+            profile.HeadMeshKey = _draft.HeadMeshKey ?? string.Empty;
+            _editingExistingProfile = false;
+            _onProfilesChanged?.Invoke();
+            ShowSelectionScreen();
+            ApplySelectionToPreview();
         }
 
         private void ShowBreedSexStep()
@@ -654,8 +707,10 @@ namespace AO.Unity.AOStyle
         private void ShowBodyStep()
         {
             _screenState = ScreenState.CreateBody;
-            _titleText.text = "Create Character - Height & Weight";
-            _statusText.text = "Choose body size presets, then click Next.";
+            _titleText.text = _editingExistingProfile ? "Edit Appearance" : "Create Character - Height & Weight";
+            _statusText.text = _editingExistingProfile
+                ? "Choose the locally rendered body and head, then click Save."
+                : "Choose body size presets, then click Next.";
             PrepareCreateStepUi();
             ClearPreviewOverlay();
             _onProfessionStepVisibilityChanged?.Invoke(false);
@@ -789,8 +844,11 @@ namespace AO.Unity.AOStyle
             footerLayout.childControlWidth = false;
             footerLayout.childForceExpandWidth = false;
             footerLayout.childAlignment = TextAnchor.MiddleRight;
-            AOStyleUiFactory.CreateButton("Back", footer, "Back", _font, ShowBreedSexStep, 74f);
-            AOStyleUiFactory.CreateButton("Next", footer, "Next", _font, ShowProfessionStep, 74f);
+            AOStyleUiFactory.CreateButton("Back", footer, "Back", _font,
+                _editingExistingProfile ? ShowSelectionScreen : ShowBreedSexStep, 74f);
+            AOStyleUiFactory.CreateButton(_editingExistingProfile ? "Save" : "Next", footer,
+                _editingExistingProfile ? "Save" : "Next", _font,
+                _editingExistingProfile ? SaveExistingAppearance : ShowProfessionStep, 74f);
 
             _detailsText.text = $"Current Body\nHeight: {_draft.Height}\nWeight: {_draft.Weight}";
             shortBtn.onClick.AddListener(NotifyBodyPreviewChanged);
@@ -1250,7 +1308,6 @@ namespace AO.Unity.AOStyle
             }
 
             _selectedProfileIndex = Mathf.Clamp(index, 0, _profiles.Count - 1);
-            ApplySelectionToPreview();
             _onSelectionChanged?.Invoke(_selectedProfileIndex);
             RefreshSelectionVisuals();
             RefreshSelectionDetails();
@@ -1281,6 +1338,12 @@ namespace AO.Unity.AOStyle
 
             if (_playButton != null)
                 _playButton.interactable = _selectedProfileIndex >= 0 && _selectedProfileIndex < _profiles.Count;
+            if (_editAppearanceButton != null)
+            {
+                _editAppearanceButton.interactable = _selectedProfileIndex >= 0
+                    && _selectedProfileIndex < _profiles.Count;
+                StyleActionButton(_editAppearanceButton, false);
+            }
             if (_backButton != null)
                 StyleActionButton(_backButton, false);
             if (_createButton != null)
@@ -1675,6 +1738,7 @@ namespace AO.Unity.AOStyle
             rt.offsetMax = Vector2.zero;
             bg.raycastTarget = false;
             bg.color = Color.white;
+            bgGo.AddComponent<RawImageAspectFill>();
             bgGo.transform.SetAsFirstSibling();
 
             // Priority 1: StreamingAssets override for quick art iteration without code changes.
