@@ -10,7 +10,10 @@
 - Camera behavior and local movement controls.
 - HUD, inventory UI, wear windows, stats windows, and drag/drop UX.
 - Character appearance and animation components.
-- Reading assets from Unity `StreamingAssets`.
+- Configuring and validating a local AO installation.
+- Reading meshes, textures, animations, items, and playfield resources through
+  the direct AODB/world-reader layer.
+- Reading optional overrides and configuration from Unity `StreamingAssets`.
 
 ## Key Areas
 
@@ -18,6 +21,8 @@
 - `AO.Unity/Assets/Scripts/AO.Unity/Prototype`
 - `AO.Unity/Assets/Scripts/AO.Unity/AOStyle`
 - `AO.Unity/Assets/Scripts/AO.Data.Unity`
+- `AO.Unity/Assets/Scripts/AO.Unity/Assets`
+- `AO.Unity/Assets/Scripts/AO.Unity/World/DirectOutdoor`
 
 ## Important Classes
 
@@ -29,6 +34,8 @@
 - `AO.Unity/Assets/Scripts/AO.Unity/World/CharacterRuntimeBridge.cs`
 - `AO.Unity/Assets/Scripts/AO.Unity/Prototype/PrototypeClientUGUI.CharacterFlow.cs`
 - `AO.Unity/Assets/Scripts/AO.Data.Unity/AODataManager.cs`
+- `AO.Unity/Assets/Scripts/AO.Unity/Assets/AOInstallConfiguration.cs`
+- `AO.Unity/Assets/Scripts/AO.Unity/World/DirectOutdoor/ResourceDatabase.cs`
 - `AO.Unity/Assets/Editor/RuntimeGlbAnimationSafetyScanner.cs`
 
 ## Current Runtime Notes
@@ -36,6 +43,11 @@
 - Character select/create flow is handled in `PrototypeClientUGUI.CharacterFlow.cs`.
 - Entering world from character flow transitions through `PrototypeWorldBootstrap.TransitionToPlayfield(...)`.
 - Playfield-specific loading UI is handled by `ShowPlayfieldLoadingOverlay()` and `HidePlayfieldLoadingOverlay()`.
+- The connection screen and **F10 > AO Assets** configure the AO installation.
+- `AODB.dll` and `AODB.Common.dll` are committed Unity plugins; no separate
+  AODB or AOGLTF checkout is required.
+- Direct playfield and character/item readers use the configured database.
+- `Application.persistentDataPath/AOAssetCache` holds disposable derived data.
 - Runtime GLB safety metadata is read from:
   - `Assets/StreamingAssets/AOData/runtime_glb_animation_safety_cache.json`
   - `Assets/StreamingAssets/AOData/runtime_glb_sanitized_map.json`

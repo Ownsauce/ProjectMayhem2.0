@@ -1,5 +1,9 @@
 # Item Mesh Batch Export
 
+> Legacy development workflow: the runtime now resolves item meshes directly
+> through AODB. Use this batch exporter only for decoder comparison, diagnostics,
+> or generating an explicit development override.
+
 This script builds a TinkerParser-compatible mesh manifest for item visuals from `items.json` plus ABIFF/CIR id-name dumps.
 
 ## What It Solves

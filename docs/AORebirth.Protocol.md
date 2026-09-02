@@ -20,7 +20,6 @@ capture-dependent payload fields are intentionally not interpreted yet.
 
 ## Information Required
 
-- Permission and supported policy for custom clients
 - Endpoint discovery and server version negotiation
 - Authentication and session-key exchange
 - Login, character list, character selection, and zone handoff

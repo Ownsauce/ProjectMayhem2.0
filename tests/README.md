@@ -1,9 +1,9 @@
 # Tests
 
-Prioritize fixtures that are synthetic or otherwise redistributable. Do not
-commit extracted AO data. Initial coverage should target cache keys and
-invalidation, coordinate conversion, packet framing, decoder error handling,
-and resolver fallback behavior.
+Prefer small deterministic fixtures that exercise one behavior at a time.
+Initial coverage should target cache keys and invalidation, coordinate
+conversion, packet framing, decoder error handling, and resolver fallback
+behavior.
 
 `AO.Client.DimensionDiscovery.Tests.cs` is a dependency-free executable test
 for `DimensionServer.url` and `dimensions_v3.txt` parsing. It deliberately uses

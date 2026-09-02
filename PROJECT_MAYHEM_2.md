@@ -11,9 +11,9 @@ world entities, combat, quests, chat, zoning, and persistence. Project Mayhem
 owns presentation, input, local asset resolution, caching, and communication
 through a backend-specific protocol adapter.
 
-The client must not ship extracted Anarchy Online content. Users configure a
-legitimate local AO installation. Required visual resources are decoded locally
-and placed in a disposable user cache.
+Users configure a local AO installation. Required visual resources are read
+directly from its database and derived results are placed in a disposable user
+cache.
 
 ## Runtime Boundary
 
@@ -52,7 +52,8 @@ tests/                    Protocol, decoder, cache, and integration tests
 placeholders/             Project-owned fallback assets only
 ```
 
-Folders are boundaries, not permission to copy extracted AO data into Git.
+Folders define code and runtime ownership boundaries. Generated local data and
+caches stay outside source-controlled package directories.
 
 ## Data Sources
 
@@ -64,9 +65,9 @@ Folders are boundaries, not permission to copy extracted AO data into Git.
 - Item, nano, stat, playfield, and resource display metadata where available
 - Resource-ID mappings required to render identities received from the server
 
-The current `StreamingAssets/AOData` exports are migration references, not
-required inputs for the finished client. Equivalent data may exist only as a
-locally generated cache outside the repository and release package.
+The current `StreamingAssets/AOData` files are optional migration references,
+development overrides, and small Project Mayhem configuration files. A complete
+pre-exported visual dataset is not required for the direct-AODB client.
 
 ### Receive from the connected server
 
@@ -89,7 +90,7 @@ working adapter for one backend does not imply compatibility with the others.
 
 ## Current Implementation Status
 
-Last updated: 2026-09-01.
+Last updated: 2026-09-02.
 
 ### Connected world and movement — implemented
 
@@ -223,8 +224,8 @@ PASS AO.Client world delta decoding
 
 Build one vertical slice before performing broad cleanup:
 
-1. Select one initial backend, confirm that it permits custom clients, and
-   obtain supported protocol or source-level packet definitions.
+1. Select one initial backend and establish its protocol or source-level packet
+   definitions.
 2. Validate a configured AO installation.
 3. Build and persist a lightweight AO resource index.
 4. Authenticate and retrieve the character list through that backend's adapter.
@@ -240,7 +241,8 @@ slice works, validate the same client-domain flow against the other adapters.
 ## Migration Rules
 
 - Preserve the existing worktree as a reference until the vertical slice works.
-- Do not copy ignored AO-derived assets into this worktree or Git history.
+- Keep disposable generated resources and caches out of source-controlled
+  package directories.
 - Keep the current Project Mayhem server available only as a temporary mock or
   test harness; it is not the only target production authority.
 - Replace `AuthoritativeNetworkClient` behind a client-facing abstraction rather
@@ -257,11 +259,11 @@ slice works, validate the same client-domain flow against the other adapters.
 The largest unknown is protocol access and compatibility for each intended
 backend. Before claiming support, establish its authentication, login/zone
 handoff, packet framing, identity, movement, and dynel update formats and
-confirm encryption, version, policy, and feature requirements. The live
+confirm encryption, version, and feature requirements. The live
 service, Ithaca, and AORebirth should be tracked as separate compatibility
 targets rather than assumed to share an interchangeable protocol.
 
-The other major dependency is an AO resource parser whose license, supported
-formats, performance, and Unity-player compatibility are acceptable. Existing
-export tools can inform the implementation, but invoking them manually is not
-the final user experience.
+The resource-reader dependency is now the bundled AODB runtime plus Project
+Mayhem's direct decoders. Remaining work is format coverage, performance,
+threading, diagnostics, and Unity-player compatibility. Export tools remain
+optional behavioral references rather than runtime requirements.

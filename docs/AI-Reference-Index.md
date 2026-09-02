@@ -12,6 +12,8 @@ Use these files first:
 - `docs/AO.Server.md`: authoritative server responsibilities, data ownership, and validation flow.
 - `docs/AO.Tools.md`: small utility and experimentation project.
 - `docs/AO.Client.md`: backend-neutral client contracts and migration status.
+- `DATA_SETUP.md`: clean-clone Unity setup and AO installation configuration.
+- `docs/AO.AssetResolution.md`: direct-AODB resource flow and cache boundaries.
 
 Current direction:
 
@@ -19,7 +21,10 @@ Current direction:
 - `AO.Client` should expose a stable client-domain API over separate adapters for the live service, Ithaca, AORebirth, and other supported backends.
 - `AO.Server` is the current Project Mayhem authority implementation and should remain useful as a mock, test harness, or optional compatible backend.
 - `AO.Unity` should send intents through `AO.Client` and render server results without parsing backend packets directly.
-- Data files currently live under `AO.Unity/Assets/StreamingAssets/AOData`; the connected server remains authoritative for live gameplay state.
+- Presentation resources are read from the configured AO database; optional
+  development/configuration files may live under
+  `AO.Unity/Assets/StreamingAssets/AOData`. The connected server remains
+  authoritative for live gameplay state.
 
 When changing behavior:
 

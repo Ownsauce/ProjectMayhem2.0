@@ -1,26 +1,78 @@
-# Local data setup
+# AO installation setup
 
-ProjectMayhem's source repository intentionally does **not** distribute data or
-assets extracted from Anarchy Online. This includes item and nano databases,
-profession/stat data, playfield exports, textures, icons, meshes, and other
-game content.
+Project Mayhem reads presentation resources directly from a local Anarchy
+Online installation. A normal source checkout does not require a pre-exported
+asset pack, an AOGLTF checkout, or manually created Unity source links.
 
-You must obtain any required content yourself from a copy of Anarchy Online
-that you are legally entitled to use. You are responsible for complying with
-the game's license, copyright law, and any rules that apply in your region.
-Do not upload extracted game content to this repository.
+## Requirements
 
-## What a source checkout contains
+- Unity `6000.3.8f1`
+- An Anarchy Online installation containing:
+  - `Anarchy.exe` or `AnarchyOnline.exe`
+  - `version.id`
+  - `cd_image/data/db/ResourceDatabase.dat`
+  - `cd_image/data/db/ResourceDatabase.idx`
 
-The repository contains ProjectMayhem source code, Unity project settings,
-documentation, and conversion/validation tools. Unity regenerates its
-`Library`, `Logs`, `Temp`, `obj`, solution, and project files locally.
+The repository includes the managed runtime assemblies used by the direct
+reader:
 
-Unity Package Manager restores declared dependencies from
-`AO.Unity/Packages/manifest.json`. A local embedded copy of
-`com.unity.inputsystem` is therefore not committed.
+```text
+AO.Unity/Assets/Plugins/AODB/AODB.dll
+AO.Unity/Assets/Plugins/AODB/AODB.Common.dll
+```
 
-The following local-data paths are ignored by Git:
+## First run
+
+1. Clone the repository and check out the Project Mayhem 2.0 branch.
+2. Open `AO.Unity` in Unity `6000.3.8f1`.
+3. Allow Unity Package Manager to restore the dependencies declared in
+   `AO.Unity/Packages/manifest.json`.
+4. Open `Assets/Scenes/TestScene.unity` and enter Play mode.
+5. Enter the AO installation folder in the connection screen, or set it under
+   **F10 > AO Assets**.
+
+The setting is stored in Unity `PlayerPrefs`. For development and automated
+launches, `PROJECTMAYHEM_AO_INSTALL` can provide the initial path. Project
+Mayhem also checks common Windows and Wine installation locations.
+
+Validation succeeds when the executable, version file, database, and index are
+present and non-empty.
+
+## Runtime data flow
+
+Direct AODB readers load requested records from the configured resource
+database. Project Mayhem snapshots records into its runtime models and stores
+disposable generated data under:
+
+```text
+Application.persistentDataPath/AOAssetCache/
+```
+
+The cache can be deleted whenever a clean rebuild is needed. The configured AO
+path is not written into the repository.
+
+## Repository packages
+
+Unity consumes these repository packages through relative entries in
+`AO.Unity/Packages/manifest.json`:
+
+```text
+file:../../AO.Core
+file:../../AO.Client
+file:../../AO.Assets
+```
+
+Keep the repository directory structure intact. Do not create the old
+`AO.Unity/Assets/External` symlinks; they are no longer part of setup.
+
+## Optional development data
+
+`AO.Unity/Assets/StreamingAssets/AOData` remains an optional compatibility and
+development-data location. The repository includes small Project Mayhem
+configuration files such as `servers.json`, but a direct-AODB client does not
+require a complete exported world or visual dataset there.
+
+Legacy tools may still use these local paths:
 
 ```text
 AO.Unity/Assets/StreamingAssets/AOData/
@@ -32,161 +84,26 @@ AO.Server/Data/
 AO.Tools/Data/
 ```
 
-## Expected layout
+These paths are ignored except for explicitly committed Project Mayhem files.
+They are not part of the standard first-run workflow.
 
-The primary runtime data root is:
+## Server and command-line projects
 
-```text
-AO.Unity/Assets/StreamingAssets/AOData/
-├── items.json
-├── nanos.json
-├── statmap.json
-├── breed.json
-├── breed_ability_data.json
-├── breed_stats.json
-├── profession.json
-├── profession_skill_cost_factors.json
-├── profession_vitals_tl.json
-├── title_level_ip_progression.json
-├── xp_needed_to_level.json
-├── skill_caps_and_color.json
-├── skill_trickle_down.json
-├── weapon_slots.json
-├── armor_slots.json
-├── implant_slots.json
-├── spell_formats.json
-├── Playfields/
-├── CharacterMeshes/
-├── ItemMeshes/
-├── BodyTextures/
-├── DungeonTextures/
-├── GeneralTextures/
-├── GroundTextures/
-├── Icons/
-└── UI/
-```
+The standalone `AO.Server` backend can use server-owned gameplay-data
+overrides under `AO.Server/Data`. That server dataset is separate from the
+Unity client's direct presentation-resource reader.
 
-Not every feature requires every optional asset directory. The core item/stat
-systems need the JSON files relevant to that feature. World loading needs
-`Playfields`; visual features additionally need their corresponding mesh,
-texture, icon, or UI directories.
+`AO.Tools` contains offline diagnostics and migration utilities. It is not
+required to point the Unity client at an AO installation.
 
-Generated world meshes used as Unity Resources belong at:
+## Troubleshooting
 
-```text
-AO.Unity/Assets/Resources/WorldMeshes/
-AO.Unity/Assets/Resources/CharacterMeshes/
-AO.Unity/Assets/Resources/ItemMeshes/
-```
-
-Keep each Unity `.meta` file beside the local asset it describes when moving an
-already-imported dataset. If the `.meta` files are absent, Unity will generate
-new ones when it imports the assets.
-
-## Obtaining and preparing data
-
-1. Install Anarchy Online from an official source and retain your own local
-   installation.
-2. Use extraction or conversion software that you are legally permitted to use
-   to export the data needed by the feature you are developing.
-3. Convert the output to the filenames and directory structure shown above.
-4. Place the prepared output under
-   `AO.Unity/Assets/StreamingAssets/AOData` and any generated Unity resource
-   meshes under `AO.Unity/Assets/Resources/WorldMeshes`.
-5. Open `AO.Unity` in the Unity Editor and allow Unity to import the local
-   assets and regenerate its cache.
-
-## Linking shared source into Unity
-
-The current Unity project consumes the repository's `AO.Client` and `AO.Core`
-source through local links under `AO.Unity/Assets/External`. Absolute links are
-machine-specific and are not committed. Recreate them after cloning.
-
-On Linux, from the repository root:
-
-```bash
-mkdir -p AO.Unity/Assets/External
-ln -s ../../../AO.Client AO.Unity/Assets/External/AO.Client
-ln -s ../../../AO.Core AO.Unity/Assets/External/AO.Core
-```
-
-On Windows, open Command Prompt with permission to create symbolic links, move
-to the repository root, and run:
-
-```bat
-mkdir AO.Unity\Assets\External 2>nul
-mklink /D AO.Unity\Assets\External\AO.Client ..\..\..\AO.Client
-mklink /D AO.Unity\Assets\External\AO.Core ..\..\..\AO.Core
-```
-
-Windows Developer Mode commonly permits non-administrator symlink creation.
-Unity will create local `.meta` files for the links; those files are ignored.
-
-Some repository utilities under `tools/` validate or build manifests from an
-already-prepared dataset. They do not grant rights to, download, or supply the
-original game content. Review each tool's parameters before running it; some
-older scripts contain Windows-oriented example paths that should be overridden
-for your checkout.
-
-### AOStatelParser
-
-AOStatelParser is a separate third-party project and is not included in this
-repository. Users who need it can obtain it directly from its upstream project:
-
-- [bitnykk/AOStatelParser](https://github.com/bitnykk/AOStatelParser)
-
-Review and comply with that project's own documentation, dependencies, and
-license terms. A local checkout may be placed at
-`_external/AOStatelParser/`; that path is ignored by Git.
-
-## Server and command-line tools
-
-By default, `AO.Server` discovers its general AO data at:
-
-```text
-AO.Unity/Assets/StreamingAssets/AOData/
-```
-
-The server also looks for server-owned overrides in:
-
-```text
-AO.Server/Data/AOData/
-AO.Server/Data/Playfields/
-AO.Server/Data/ipdist.xml
-```
-
-When a server-owned AOData file exists, it takes precedence over the Unity
-copy. Otherwise, the server falls back to the primary Unity AOData directory.
-Server startup also supports explicit data-path arguments; consult
-`AO.Server/Program.cs` for the currently accepted options.
-
-`AO.Tools` currently expects these local inputs:
-
-```text
-AO.Core/Data/items.json
-AO.Core/Data/ipdist.xml
-```
-
-They may be copied from your prepared local data or produced directly by your
-own conversion process. Because all of these destinations are ignored, doing
-so will not accidentally stage them for Git.
-
-## Verifying before a commit
-
-After initializing the repository, always inspect what Git would include:
-
-```bash
-git status --short --untracked-files=all
-git add --dry-run .
-```
-
-None of the ignored data roots above should appear. To diagnose a particular
-file, run:
-
-```bash
-git check-ignore -v path/to/file
-```
-
-Do not use `git add -f` on these paths. If a small test fixture is later added,
-it should contain original or clearly redistributable synthetic data, not a
-subset copied from the game.
+- **Install rejected:** select the directory containing the AO executable and
+  `cd_image`, not the `cd_image/data/db` directory itself.
+- **Packages fail to resolve:** confirm the repository still contains sibling
+  `AO.Core`, `AO.Client`, and `AO.Assets` directories relative to `AO.Unity`.
+- **Old generated output appears:** clear
+  `Application.persistentDataPath/AOAssetCache` and restart the client.
+- **A resource is unsupported:** check the Unity console for its resource type
+  and ID. Unsupported records should fall back without invalidating the whole
+  playfield load.

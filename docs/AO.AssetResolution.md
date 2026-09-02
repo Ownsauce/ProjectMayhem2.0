@@ -2,204 +2,117 @@
 
 ## Purpose
 
-Project Mayhem should use a hybrid, on-demand asset pipeline. Instead of
-redistributing a complete export of Anarchy Online assets, each user supplies
-their own legitimate AO installation. Project Mayhem resolves requested assets
-from that installation, converts them locally, and stores the result in a
-user-local cache.
+Project Mayhem resolves presentation resources on demand from the configured
+AO installation. Direct AODB reads are the primary Unity runtime path. Derived
+results may be stored in a disposable local cache, while Project Mayhem
+placeholders cover missing or unsupported records.
 
-This approach keeps AO-owned presentation assets out of the repository and
-release packages while preserving predictable runtime loading performance after
-an asset has been converted once.
-
-## Asset Lookup Flow
+## Lookup flow
 
 ```text
-Project Mayhem requests an asset
+Project Mayhem requests a resource
         |
         v
-Check the user-local converted cache
+Check the user-local derived cache
         |
-        +-- Found ------> Load the converted asset
+        +-- Found ------> Load the cached result
         |
-        +-- Missing ----> Read it from the configured AO installation
+        +-- Missing ----> Read the configured AO database
                                 |
                                 v
-                         Convert and cache it
+                       Decode or snapshot the record
                                 |
-                                +-- Success --> Load the converted asset
+                                +-- Success --> Render and optionally cache
                                 |
-                                +-- Failure --> Use a Project Mayhem placeholder
+                                +-- Failure --> Use a placeholder and log ID/type
 ```
 
-The current `StreamingAssets/AOData` files can remain available during the
-migration as an optional development or compatibility fallback. They should not
-be the long-term source of redistributed AO-owned visual assets.
+`StreamingAssets/AOData` remains an optional development and compatibility
+source. It is not required to contain a complete pre-exported visual dataset.
 
-## Ownership Boundaries
+## Responsibility boundaries
 
-### Locally resolved from the AO installation
+The local AO database supplies presentation resources and metadata such as:
 
 - Character, creature, item, and world meshes
-- Textures and icons
-- Animations
-- Sounds and music, when supported
-- Static playfield resources
-- Other presentation data stored in AO resource databases
+- Terrain, water, indoor rooms, and static playfield records
+- Textures, icons, animations, and supported audio
+- Resource names and resource-ID mappings
 
-### Maintained by Project Mayhem
+The connected server supplies live and authoritative state such as:
 
-- Mob placement and respawn rules
-- NPC behavior and AI
-- Combat and gameplay rules
-- Quest reconstruction and scripting
-- Server state and persistence
-- Corrections, overrides, and asset-ID mappings created for Project Mayhem
-- Original placeholder assets
+- Characters, inventory, equipment, and stats
+- Current playfield and position
+- Players, NPCs, mobs, pets, and interactive objects
+- Combat, nanos, loot, quests, shops, chat, and persistence
 
-An installed AO client does not necessarily contain the authoritative server
-rules needed to reconstruct spawns, AI, quests, or live world state. Those
-systems must remain Project Mayhem or server responsibilities even when their
-visual assets are resolved from AO locally.
+Local resource records describe how an identity looks; they do not replace the
+server state describing what currently exists or what actions are accepted.
 
-## Proposed Runtime Interface
+## Runtime components
 
-Unity systems should request assets through a resolver rather than constructing
-paths directly into `StreamingAssets`.
+- `AOInstallConfiguration` stores the selected path and exposes the cache root.
+- `AOInstallLocator` discovers and validates installation candidates.
+- `AOResourceDatabase` and `AOResourceCatalog` provide engine-neutral indexed
+  raw access.
+- Bundled AODB assemblies provide the typed records used by the current Unity
+  playfield, mesh, texture, item, and animation readers.
+- `AOInstallAssetResolver` and `AOAssetCache` support asynchronous converted
+  outputs where a persistent file is useful.
+- `AOCompositeAssetResolver` supports ordered overrides and fallbacks.
 
-```csharp
-public interface IAOAssetResolver
-{
-    Task<string> ResolveMeshAsync(int resourceId);
-    Task<string> ResolveTextureAsync(int resourceId);
-    Task<string> ResolveAnimationAsync(int resourceId);
-}
+Unity presentation code should request Project Mayhem models or resolved
+assets. Keep database parsing and AODB object traversal in the asset/world
+reader layer, and snapshot mutable record data before background processing.
+
+## Configuration
+
+The user can select the AO root from the connection screen or **F10 > AO
+Assets**. The root is valid when it contains:
+
+```text
+Anarchy.exe or AnarchyOnline.exe
+version.id
+cd_image/data/db/ResourceDatabase.dat
+cd_image/data/db/ResourceDatabase.idx
 ```
 
-The initial implementation may return converted file paths so the existing GLB
-and texture-loading code can remain mostly unchanged. The interface can later
-return richer result objects containing asset type, provenance, diagnostics,
-and fallback information.
+`PROJECTMAYHEM_AO_INSTALL` can seed the path. Common Windows and Wine paths are
+also probed. The selected path is stored locally in `PlayerPrefs`.
 
-The resolver should be responsible for:
+## Cache design
 
-1. Checking the converted cache.
-2. Locating and validating the configured AO installation.
-3. Reading the requested AO resource through the parser/extraction layer.
-4. Converting the resource into a Unity-compatible format.
-5. Writing it atomically into the cache.
-6. Returning a placeholder or a clear error when resolution fails.
-
-## Cache Design
-
-Generated AO content should live outside the repository and application install
-folder. Unity's `Application.persistentDataPath` is an appropriate base:
+Generated data belongs under:
 
 ```text
 Application.persistentDataPath/
 └── AOAssetCache/
-    ├── meshes/
-    ├── textures/
-    ├── animations/
-    ├── audio/
-    └── manifests/
 ```
 
-Cache identities should include enough information to invalidate stale output:
+Cache identity should include the resource type and ID, database fingerprint,
+decoder/converter version, output format, and relevant settings. Writers use a
+temporary file and publish only complete output. Concurrent requests for the
+same destination share one operation.
 
-- AO resource type and resource ID
-- Converter/parser version
-- Output format version
-- Source AO database fingerprint or version
-- Relevant conversion settings
+The cache is an optimization and must remain safely disposable. A missing or
+stale cache entry should trigger another database read, not break the client.
 
-Conversion should write to a temporary file and rename it only after successful
-completion so interrupted conversions cannot leave apparently valid cache
-entries. Concurrent requests for the same resource should share one conversion
-operation.
+## Performance and diagnostics
 
-## Configuration
+- Keep database I/O and expensive decoding away from Unity's main thread when
+  the AODB object has been safely snapshotted.
+- Load required spawn-area resources during the playfield loading phase.
+- Stream optional and distant resources incrementally.
+- Deduplicate concurrent requests for identical resource IDs.
+- Log the resource type, ID, database fingerprint, cache result, duration, and
+  fallback reason when diagnosis is useful.
+- Treat an unsupported or malformed record as a local failure rather than
+  invalidating an entire playfield.
 
-Project Mayhem should expose an AO installation-path setting with:
+## Current direction
 
-- Automatic discovery of common install locations
-- Manual folder selection
-- Validation that required AO resource databases exist
-- A visible validation result and detected client version
-- An option to clear or rebuild the generated cache
-
-The path must not be hard-coded or committed to source control. A build should
-remain operable with placeholders when AO is unavailable, unless a particular
-release deliberately requires an AO installation.
-
-## Migration Strategy
-
-1. Introduce `IAOAssetResolver` without changing current visual behavior.
-2. Implement a `StreamingAssets` resolver around the existing exported files.
-3. Add an AO-install resolver backed by the existing extraction/parser tooling.
-4. Add the persistent converted-cache layer in front of both sources.
-5. Migrate character and item meshes first because their current GLB loading
-   paths already provide a useful integration boundary.
-6. Migrate textures, animations, static world objects, and playfield assets in
-   small, independently testable stages.
-7. Replace committed AO-derived assets with original placeholders after direct
-   resolution has adequate coverage.
-8. Add packaging checks that reject extracted or cached AO assets from releases.
-
-During migration, the recommended priority order is:
-
-```text
-User-local converted cache
-    -> configured AO installation
-    -> optional development StreamingAssets export
-    -> Project Mayhem placeholder
-```
-
-For production packages intended not to redistribute extracted AO assets, the
-development `StreamingAssets` fallback should be disabled or verified to contain
-only Project Mayhem-owned data.
-
-## Performance and Reliability
-
-On-demand conversion must not block Unity's main thread. Loading screens may
-await required world assets, while optional or distant assets can stream in
-incrementally. Common assets can be prewarmed after startup or character
-selection.
-
-Useful diagnostics include:
-
-- Cache hit and miss counts
-- Extraction and conversion duration
-- Failed resource IDs and parser errors
-- Placeholder usage
-- Cache size and converter version
-- AO installation validation state
-
-The runtime should tolerate individual corrupt or unsupported resources without
-failing an entire playfield load.
-
-## Distribution and Legal Considerations
-
-This architecture is intended to reduce redistribution risk by requiring users
-to obtain AO content from their own installation and generating converted files
-locally. Project Mayhem releases should not include extracted AO meshes,
-textures, audio, animations, or other proprietary content.
-
-Repository and build safeguards should include:
-
-- Ignore rules for generated caches and extraction output
-- Release validation that scans packages for prohibited generated content
-- Clear documentation requiring a legitimately obtained AO installation
-- Separation between Project Mayhem-authored data and AO-derived data
-- No automatic upload or sharing of locally converted cache contents
-
-This design is a technical risk-reduction measure and not legal advice. Project
-maintainers should still review applicable licenses, terms, and interoperability
-requirements before distribution.
-
-## Recommended Direction
-
-Adopt the hybrid resolver and local cache as the long-term asset architecture.
-Keep gameplay authority with the connected live or private server, resolve
-AO-owned presentation resources from the user's installation, and retain
-original placeholders for missing or unsupported assets.
+Continue expanding direct decoders in independently testable slices. Use
+AOGLTF, AOSharp exports, and older `StreamingAssets` outputs only as behavioral
+references or optional developer overrides. The shipped runtime architecture
+should depend on the configured AO database, the bundled AODB assemblies, and
+Project Mayhem's own cache and model boundaries.

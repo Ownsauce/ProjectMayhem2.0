@@ -5,19 +5,25 @@
 ProjectMayhem is currently a Unity-heavy prototype with a shared C# gameplay core. The target architecture should be:
 
 - `AO.Core`: gameplay rules, stats, items, modifiers, progression, simulation primitives.
+- `AO.Assets`: AO installation discovery, direct database access, decoding,
+  conversion helpers, navigation data, and persistent cache boundaries.
 - `AO.Server`: Project Mayhem's current authoritative runtime and a future mock,
   test harness, or optional compatible backend.
 - `AO.Unity`: client-side presentation, world rendering, input, camera, local UI, optional prediction.
 - `AO.Tools`: local experiments and offline tooling.
 - `AO.Client`: backend-neutral client state plus adapters for the live service,
-  Ithaca, AORebirth, and other supported servers; currently minimal.
+  Ithaca, AORebirth, and other supported servers.
 
 ## What Exists Today
 
 - `AO.Core` already contains the most reusable gameplay logic.
 - `AO.Unity` currently owns the main runtime bootstrap through `AODataManager` and `PrototypeWorldBootstrap`.
-- `AO.Unity` loads gameplay data from `Assets/StreamingAssets/AOData`.
-- `server.py` is only a lightweight relay prototype and is not authoritative.
+- `AO.Unity` resolves presentation resources directly from the configured AO
+  database through bundled AODB assemblies and the `AO.Assets` boundary.
+- `Assets/StreamingAssets/AOData` supplies optional development data and small
+  client configuration files; it is not the required visual-asset source.
+- `AO.Client` contains the working AORebirth adapter and neutral session/world
+  models used by Unity.
 
 ## Client Loading Lifecycle (Current and Target)
 
@@ -53,6 +59,8 @@ Project Mayhem should own:
 - Camera, controls, animation, VFX, audio, HUD, drag/drop UX, and scene presentation.
 - Sending player intents to the server.
 - Rendering authoritative snapshots and deltas from the server.
+- Discovering the local AO installation and rendering its presentation
+  resources through the asset-resolution layer.
 
 The Unity client should not be the source of truth for:
 
