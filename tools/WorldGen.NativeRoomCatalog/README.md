@@ -1,19 +1,27 @@
-# PF 127 native room catalog
+# Native AO room catalog preparation
 
 Builds room metadata and a **local server physics** package from the selected AO
-installation and the existing PF 127 indoor collision cache. The Unity runtime
+installation and a validated indoor collision cache for the selected source. The Unity runtime
 continues reading its own meshes/textures from the selected installation.
+PF127 is the default source; PF1931 has its own `pf1931.source.json` definition.
+The cache, prepared outputs and published packages are local generated data and
+are Git-ignored. A fresh checkout must prepare them locally.
 
 ```bash
 dotnet run --project tools/WorldGen.NativeRoomCatalog/WorldGen.NativeRoomCatalog.csproj -- \
   '/path/to/Anarchy Online' '/path/to/127_v2.aois' '/tmp/pf127-native-rooms'
 ```
 
-Outputs `pf127.rooms.json` and `pf127.rooms.collision`. Copy the JSON to Unity
-`Assets/StreamingAssets/NativeCopies` and both files to the local server
-`NativeCopies`, then rebuild/reinstall. JSON byte hashes must match. The tool also
-checks seed variation, deterministic recipes and doorway floor support. Catalog
-version 3 measures each doorway's actual passage floor, capsule headroom and body
+Outputs `pf<source>.rooms.json` and `pf<source>.rooms.collision`. Publish these
+through `WorldGen.PublishRoomCatalog` to stage matching retained revisions for both
+hosts, then rebuild/install the server. See
+[publication and source selection](../../docs/native-dungeon-authoring.md#select-review-and-publish-sources--october-4-2026).
+Directly copying the old PF127 filenames is the legacy workflow; it does not
+activate a registered source revision.
+
+The tool checks seed variation, deterministic recipes and doorway floor support.
+Current catalog version4 / collision policy1 clips collision to the source-room
+footprint and measures each doorway's actual passage floor, capsule headroom and body
 obstructions. Unsupported or blocked sockets are excluded from generation. This
 distinguishes raised exits from buried terrain, roofs and lintel surfaces. Checks
 compare captured floor heights on both sides of every generated join, including

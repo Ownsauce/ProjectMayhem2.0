@@ -6,7 +6,7 @@ asset pack, an AOGLTF checkout, or manually created Unity source links.
 
 ## Requirements
 
-- Unity `6000.3.8f1`
+- Unity version recorded in `AO.Unity/ProjectSettings/ProjectVersion.txt`
 - An Anarchy Online installation containing:
   - `Anarchy.exe` or `AnarchyOnline.exe`
   - `version.id`
@@ -24,11 +24,13 @@ AO.Unity/Assets/Plugins/AODB/AODB.Common.dll
 ## First run
 
 1. Clone the repository and check out the Project Mayhem 2.0 branch.
-2. Open `AO.Unity` in Unity `6000.3.8f1`.
-3. Allow Unity Package Manager to restore the dependencies declared in
+2. Clone WorldGen beside ProjectMayhem2.0; its Core/Geometry packages are referenced
+   through sibling paths in the Unity package manifest.
+3. Open `AO.Unity` using the version in `ProjectSettings/ProjectVersion.txt`.
+4. Allow Unity Package Manager to restore the dependencies declared in
    `AO.Unity/Packages/manifest.json`.
-4. Open `Assets/Scenes/TestScene.unity` and enter Play mode.
-5. Enter the AO installation folder in the connection screen, or set it under
+5. Open `Assets/Scenes/TestScene.unity` and enter Play mode.
+6. Enter the AO installation folder in the connection screen, or set it under
    **F10 > AO Assets**.
 
 The setting is stored in Unity `PlayerPrefs`. For development and automated
