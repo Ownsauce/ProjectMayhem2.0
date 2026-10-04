@@ -57,7 +57,7 @@ namespace AO.Unity.Prototype
             if (IsActionPressedInputSystem("knowledge_window", kb)) PublishStatusStub("Knowledge Window", "stub");
             if (IsActionPressedInputSystem("missions_window", kb)) PublishStatusStub("Missions Window", "stub");
             if (IsActionPressedInputSystem("team_window", kb)) PublishStatusStub("Team Window", "stub");
-            if (IsActionPressedInputSystem("mini_map", kb)) PublishStatusStub("Mini Map", "stub");
+            if (IsActionPressedInputSystem("mini_map", kb)) _gameServerSession?.ToggleWorldGenMiniMap();
             if (IsActionPressedInputSystem("friends_window", kb)) PublishStatusStub("Friends Window", "stub");
 
             if (IsActionPressedInputSystem("screenshot", kb)) CaptureScreenshot();
@@ -139,7 +139,7 @@ namespace AO.Unity.Prototype
             if (IsActionPressedLegacy("knowledge_window")) PublishStatusStub("Knowledge Window", "stub");
             if (IsActionPressedLegacy("missions_window")) PublishStatusStub("Missions Window", "stub");
             if (IsActionPressedLegacy("team_window")) PublishStatusStub("Team Window", "stub");
-            if (IsActionPressedLegacy("mini_map")) PublishStatusStub("Mini Map", "stub");
+            if (IsActionPressedLegacy("mini_map")) _gameServerSession?.ToggleWorldGenMiniMap();
             if (IsActionPressedLegacy("friends_window")) PublishStatusStub("Friends Window", "stub");
 
             if (IsActionPressedLegacy("screenshot")) CaptureScreenshot();

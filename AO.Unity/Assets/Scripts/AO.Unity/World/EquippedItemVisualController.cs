@@ -222,6 +222,11 @@ namespace AO.Unity.World
 
         private void LateUpdate()
         {
+            if (GetComponent<ServerAppearanceVisualController>()?.HasAppearance == true)
+            {
+                ClearAll();
+                return;
+            }
             if (!enableEquippedItemVisuals || bridge?.Character == null)
             {
                 ClearAll();

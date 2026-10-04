@@ -9,7 +9,7 @@ namespace AO.Client.World
             float x, float y, float z, uint appearance = 0,
             int npcFamily = 0, int npcLosHeight = 0, int npcUnknown = 0,
             uint monsterData = 0, int monsterScale = 0,
-            int visualFlags = 0, int visibleTitle = 0)
+            int visualFlags = 0, int visibleTitle = 0, CharacterAppearanceSnapshot equipmentAppearance = null)
         {
             IdentityType = identityType;
             IdentityInstance = identityInstance;
@@ -30,6 +30,7 @@ namespace AO.Client.World
             MonsterScale = monsterScale;
             VisualFlags = visualFlags;
             VisibleTitle = visibleTitle;
+            EquipmentAppearance = equipmentAppearance;
         }
 
         public int IdentityType { get; }
@@ -51,13 +52,23 @@ namespace AO.Client.World
         public int MonsterScale { get; }
         public int VisualFlags { get; }
         public int VisibleTitle { get; }
+        public CharacterAppearanceSnapshot EquipmentAppearance { get; }
+
+        public NearbyEntity WithEquipmentAppearance(CharacterAppearanceSnapshot value)
+        {
+            value = value?.WithHead(value.HeadMeshId ?? EquipmentAppearance?.HeadMeshId);
+            return new NearbyEntity(IdentityType, IdentityInstance, Kind, Name, Level,
+                Health, HealthDamage, PlayfieldId, X, Y, Z, Appearance,
+                NpcFamily, NpcLosHeight, NpcUnknown, MonsterData, MonsterScale,
+                value?.VisualFlags ?? VisualFlags, VisibleTitle, value);
+        }
 
         public NearbyEntity WithPosition(float x, float y, float z)
         {
             return new NearbyEntity(IdentityType, IdentityInstance, Kind, Name, Level,
                 Health, HealthDamage, PlayfieldId, x, y, z, Appearance,
                 NpcFamily, NpcLosHeight, NpcUnknown, MonsterData, MonsterScale,
-                VisualFlags, VisibleTitle);
+                VisualFlags, VisibleTitle, EquipmentAppearance);
         }
 
         public NearbyEntity WithHealth(int maximumHealth, int currentHealth)
@@ -66,7 +77,7 @@ namespace AO.Client.World
             return new NearbyEntity(IdentityType, IdentityInstance, Kind, Name, Level,
                 maximumHealth, damage, PlayfieldId, X, Y, Z, Appearance,
                 NpcFamily, NpcLosHeight, NpcUnknown, MonsterData, MonsterScale,
-                VisualFlags, VisibleTitle);
+                VisualFlags, VisibleTitle, EquipmentAppearance);
         }
     }
 }

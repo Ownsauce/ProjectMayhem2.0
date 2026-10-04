@@ -1,0 +1,17 @@
+--- a/AORebirth/Server/ZoneEngine_New/Core/WorldSimulation/PlayfieldWorldSimulation.cs
++++ b/AORebirth/Server/ZoneEngine_New/Core/WorldSimulation/PlayfieldWorldSimulation.cs
+@@ -474,11 +474,11 @@
+ 
+         static void AddQuad(List<Vec3> triangles, Vec3 a, Vec3 b, Vec3 c, Vec3 d)
+         {
+-            // N3Lite's triangle test is one-sided. Each box face needs both sides.
++            // Box faces are wound to block entry from outside. Keep them
++            // one-sided: adding reversed triangles also blocks escape when a
++            // movement probe begins inside a wall after a contact/correction.
+             triangles.Add(a); triangles.Add(b); triangles.Add(c);
+             triangles.Add(a); triangles.Add(c); triangles.Add(d);
+-            triangles.Add(c); triangles.Add(b); triangles.Add(a);
+-            triangles.Add(d); triangles.Add(c); triangles.Add(a);
+         }
+ 
+         static TriangleMeshSurface BuildTriangleMesh(List<Vec3> triangles)

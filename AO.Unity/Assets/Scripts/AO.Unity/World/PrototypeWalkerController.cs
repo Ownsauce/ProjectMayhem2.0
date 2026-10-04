@@ -60,6 +60,13 @@ namespace AO.Unity.World
         private float _cameraDistance;
         private float _pitch;
         private float _verticalVelocity;
+        private float _lastGroundedAt = -100f;
+        private float _jumpQueuedUntil = -1f;
+        private bool _jumpInProgress;
+        private bool _hasAuthoritativeFloor;
+        private float _authoritativeFloorY;
+        private Vector3 _authoritativeFloorAnchor;
+        private float _authoritativeFloorExpiresAt;
         private bool _warnedInputBackend;
         private PrototypeWorldBootstrap _bootstrap;
         private CharacterAppearanceController _appearanceController;
@@ -72,15 +79,29 @@ namespace AO.Unity.World
         private Vector3 _lastMovementIntent = Vector3.zero;
         private Vector3 _planarVelocity = Vector3.zero;
         private bool _movementBlockedByCollision;
+        private bool _modalInputSuppressed;
         private Vector3 _blockedMovementDirection = Vector3.zero;
+        private readonly List<Vector3> _wallContactNormals = new List<Vector3>(4);
+        private bool _collectWallContacts;
         private readonly RaycastHit[] _cameraCollisionHits = new RaycastHit[32];
+        private readonly RaycastHit[] _groundProbeHits = new RaycastHit[12];
+
+        public bool IsEffectivelyGrounded => _controller != null
+            && (_controller.isGrounded || ProbeGroundBelowFeet(0.34f));
 
         private void Awake()
         {
             _controller = GetComponent<CharacterController>();
             _controller.height = 1.8f;
-            _controller.radius = 0.35f;
+            // Match the current ZoneEngine_New MovementConfig.BodyRadius.
+            // The server probes at 0.4 m from the center; a 0.4 m client
+            // capsule plus skin width lets those probes start inside a wall,
+            // so even retreat can be rejected repeatedly.
+            _controller.radius = 0.5f;
             _controller.center = new Vector3(0f, 0.9f, 0f);
+            _controller.skinWidth = 0.02f;
+            _controller.stepOffset = 0.5f;
+            _controller.minMoveDistance = 0f;
 
             _cam = Camera.main != null ? Camera.main.transform : null;
             _bootstrap = FindFirstObjectByType<PrototypeWorldBootstrap>();
@@ -112,6 +133,8 @@ namespace AO.Unity.World
 
         private void Update()
         {
+            if (_modalInputSuppressed)
+                return;
             HandleLook();
             HandleMove();
             HandleCameraZoom();
@@ -343,6 +366,13 @@ namespace AO.Unity.World
             float strafe = ReadStrafeInput();
             _lastMovementIntent = BuildMovementIntent(forward, strafe);
             _appearanceController?.SetLocalLocomotionIntent(forward, strafe);
+            bool jumpPressed = WantsJump();
+
+            if (!localMovementEnabled)
+            {
+                _verticalVelocity = 0f;
+                return;
+            }
 
             if (movementMode == MovementMode.Flight)
             {
@@ -354,23 +384,72 @@ namespace AO.Unity.World
 
             var horizontal = ComputeHorizontalMotion(forward, strafe);
 
-            if (_controller.isGrounded)
+            if (jumpPressed)
             {
-                _verticalVelocity = -1f;
-                if (WantsJump())
-                    _verticalVelocity = Mathf.Sqrt(2f * gravity * jumpHeight);
+                _jumpQueuedUntil = Time.time + 0.18f;
             }
+            // The downward probe can still see a floor during the first frames
+            // of takeoff. Never turn that into a new grounded frame while rising.
+            // A landing correction is local recovery, not a permanent horizontal floor.
+            Vector3 supportTravel = transform.position - _authoritativeFloorAnchor;
+            supportTravel.y = 0f;
+            if (_hasAuthoritativeFloor && (Time.time > _authoritativeFloorExpiresAt
+                || supportTravel.sqrMagnitude > 0.04f))
+                _hasAuthoritativeFloor = false;
+            bool authoritativeGroundContact = _hasAuthoritativeFloor
+                && !_jumpInProgress
+                && _verticalVelocity <= 0f
+                && Mathf.Abs(transform.position.y - _authoritativeFloorY) <= 0.55f;
+            if (authoritativeGroundContact)
+                RestoreAuthoritativeFloorContact();
+            bool groundContact = _verticalVelocity <= 0f
+                && (authoritativeGroundContact || IsEffectivelyGrounded);
+            if (groundContact)
+            {
+                _lastGroundedAt = Time.time;
+                _jumpInProgress = false;
+            }
+            bool canJump = !_jumpInProgress
+                && (groundContact || Time.time - _lastGroundedAt <= 0.12f);
+            if (canJump && Time.time <= _jumpQueuedUntil)
+            {
+                _hasAuthoritativeFloor = false;
+                _verticalVelocity = Mathf.Sqrt(2f * gravity * jumpHeight);
+                _jumpQueuedUntil = -1f;
+                _jumpInProgress = true;
+            }
+            else if (groundContact)
+                // ZoneEngine has already established this exact support plane.
+                // Do not apply Unity's downward ground-stick velocity when its
+                // CharacterController failed to recognize the same collider; doing
+                // so recreates the sink/correct loop one frame after recovery.
+                _verticalVelocity = authoritativeGroundContact ? 0f : -1f;
             else
-            {
                 _verticalVelocity -= gravity * Time.deltaTime;
-            }
 
             if (localMovementEnabled)
             {
-                var motion = horizontal;
-                motion.y = _verticalVelocity;
-                var collisionFlags = _controller.Move(motion * Time.deltaTime);
-                UpdateBlockedMovementState(collisionFlags, _lastMovementIntent);
+                // A diagonal CharacterController.Move can wedge the capsule
+                // between a raised cave shelf and the lower path. Resolve
+                // planar travel first, then jump/fall: a rejected climb must
+                // still leave lateral and backward movement available.
+                Vector3 planarStart = transform.position;
+                _wallContactNormals.Clear(); _collectWallContacts = true;
+                var horizontalFlags = _controller.Move(horizontal * Time.deltaTime);
+                _collectWallContacts = false;
+                if ((horizontalFlags & CollisionFlags.Sides) != 0)
+                {
+                    // Keep only velocity the capsule actually achieved. A stopped
+                    // wall contact must not accumulate speed into the obstacle.
+                    Vector3 achieved = transform.position - planarStart;
+                    achieved.y = 0f;
+                    _planarVelocity = achieved / Mathf.Max(Time.deltaTime, 0.0001f);
+                }
+                var verticalFlags = _controller.Move(
+                    Vector3.up * (_verticalVelocity * Time.deltaTime));
+                if ((verticalFlags & CollisionFlags.Above) != 0 && _verticalVelocity > 0f)
+                    _verticalVelocity = 0f;
+                UpdateBlockedMovementState(horizontalFlags, _lastMovementIntent);
             }
             else
             {
@@ -381,13 +460,30 @@ namespace AO.Unity.World
 
         public Vector3 GetMovementIntentWorld()
         {
+            if (_modalInputSuppressed)
+                return Vector3.zero;
             float forward = ReadForwardInput();
             float strafe = ReadStrafeInput();
             var intent = BuildMovementIntent(forward, strafe);
-            if (_movementBlockedByCollision && intent.sqrMagnitude > 0.0001f)
-                return Vector3.zero;
+            return FilterCollisionBlockedIntent(intent);
+        }
 
-            return intent;
+        private void OnControllerColliderHit(ControllerColliderHit hit)
+        {
+            if (!_collectWallContacts || Mathf.Abs(hit.normal.y) >= .65f) return;
+            Vector3 normal = hit.normal; normal.y = 0;
+            if (normal.sqrMagnitude < .0001f) return;
+            normal.Normalize();
+            if (Vector3.Dot(_lastMovementIntent, normal) >= -.001f) return;
+            if (_wallContactNormals.Count < 8 && !_wallContactNormals.Exists(n => Vector3.Dot(n, normal) > .995f))
+                _wallContactNormals.Add(normal);
+        }
+        private Vector3 FilterCollisionBlockedIntent(Vector3 intent)
+        {
+            if (!_movementBlockedByCollision || intent.sqrMagnitude <= .0001f) return intent;
+            // Remove only travel into the contact plane. Keep its tangent and any
+            // retreat immediately; a doorway jamb must not suppress the whole key input.
+            return MovementWallSliding.Project(intent, _wallContactNormals, _blockedMovementDirection);
         }
 
         public void SetLocalMovementEnabled(bool enabled)
@@ -399,6 +495,19 @@ namespace AO.Unity.World
                 _hasAuthoritativeTarget = false;
                 _authoritativeTargetPosition = transform.position;
             }
+        }
+
+        public void SetModalInputSuppressed(bool suppressed)
+        {
+            _modalInputSuppressed = suppressed;
+            _leftLookDragActive = false;
+            _rightLookDragActive = false;
+            _dragRestorePending = false;
+            _planarVelocity = Vector3.zero;
+            _lastMovementIntent = Vector3.zero;
+            _appearanceController?.SetLocalLocomotionIntent(0f, 0f);
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
         }
 
         public float GetRunSpeed() => moveSpeed;
@@ -425,6 +534,10 @@ namespace AO.Unity.World
             MovementMode previousMode = movementMode;
             movementMode = value;
             _verticalVelocity = 0f;
+            _jumpQueuedUntil = -1f;
+            _jumpInProgress = false;
+            _hasAuthoritativeFloor = false;
+            _lastGroundedAt = -100f;
             _planarVelocity = Vector3.zero;
             ApplyMovementModePresentation();
 
@@ -435,6 +548,22 @@ namespace AO.Unity.World
         public void ApplyAuthoritativePosition(Vector3 position)
         {
             var current = transform.position;
+
+            // Normal movement remains locally predicted on Y so jumps are not pulled
+            // back to the floor by every snapshot. If the local controller has fallen
+            // materially below the authoritative server position, however, preserving
+            // its local Y makes recovery impossible and creates an endless fall loop.
+            // The authored rail trench is 1.2 m deep, so a normal platform descent
+            // must not trigger recovery. Recover only after a genuine >1.25 m fall.
+            if (movementMode == MovementMode.Grounded && position.y - current.y > 1.25f)
+            {
+                bool wasEnabled = _controller != null && _controller.enabled;
+                if (wasEnabled) _controller.enabled = false;
+                transform.position = new Vector3(current.x, position.y, current.z);
+                if (wasEnabled) _controller.enabled = true;
+                _verticalVelocity = -1f;
+                current = transform.position;
+            }
             var target = new Vector3(position.x, current.y, position.z);
             var horizontalError = target - current;
             horizontalError.y = 0f;
@@ -474,6 +603,10 @@ namespace AO.Unity.World
                 _controller.enabled = true;
 
             _verticalVelocity = 0f;
+            _jumpQueuedUntil = -1f;
+            _jumpInProgress = false;
+            _hasAuthoritativeFloor = false;
+            _lastGroundedAt = -100f;
             _authoritativeTargetPosition = transform.position;
             _hasAuthoritativeTarget = false;
             _movementBlockedByCollision = false;
@@ -482,6 +615,103 @@ namespace AO.Unity.World
             _planarVelocity = Vector3.zero;
             // Re-center camera behind character after server-authoritative reposition.
             RecenterCameraBehindCharacter();
+        }
+
+        public void ApplyAuthoritativeCollisionCorrection(Vector3 position)
+        {
+            if (_controller == null)
+                _controller = GetComponent<CharacterController>();
+            Vector3 before = transform.position;
+            Vector3 correction = position - before;
+            bool largeCorrection = correction.sqrMagnitude > 0.25f;
+            bool verticalCorrection = Mathf.Abs(correction.y) > 0.10f;
+            bool verticalLandingCorrection = verticalCorrection
+                && (_verticalVelocity <= 0f || correction.y > 0f);
+            bool ceilingCorrection = verticalCorrection && !verticalLandingCorrection;
+
+            // A server wall correction cannot be applied by moving the Transform
+            // beneath an enabled CharacterController. Re-enable at the corrected
+            // point so its next Move starts with a fresh, non-overlapping capsule.
+            bool wasEnabled = _controller != null && _controller.enabled;
+            if (wasEnabled) _controller.enabled = false;
+            // Start a vertical recovery just above the authoritative support. Placing
+            // a CharacterController exactly on a plane does not reliably establish a
+            // Below contact and the next gravity step can begin inside the collider.
+            transform.position = verticalLandingCorrection
+                ? position + Vector3.up * 0.08f
+                : position;
+            if (wasEnabled) _controller.enabled = true;
+            Physics.SyncTransforms();
+            if (verticalLandingCorrection && wasEnabled)
+                _controller.Move(Vector3.down * 0.12f);
+
+            _authoritativeTargetPosition = position;
+            _hasAuthoritativeTarget = false;
+            bool horizontalRejection = !verticalCorrection
+                && new Vector2(correction.x, correction.z).sqrMagnitude > 0.0025f;
+            if (horizontalRejection && _lastMovementIntent.sqrMagnitude > 0.0001f)
+            {
+                // The authoritative motor rejected travel into a solid object.
+                // Use the rejected component as the blocking plane, preserving
+                // tangential input while the capsule finds a fresh local contact.
+                _movementBlockedByCollision = true;
+                Vector3 rejected = -correction; rejected.y = 0;
+                _blockedMovementDirection = rejected.normalized;
+                _wallContactNormals.Clear();
+            }
+            else if (!horizontalRejection)
+            {
+                _movementBlockedByCollision = false;
+                _blockedMovementDirection = Vector3.zero;
+            }
+            if (largeCorrection) _planarVelocity = Vector3.zero;
+            else if (horizontalRejection) _planarVelocity = FilterCollisionBlockedIntent(_planarVelocity);
+            // Preserve jump/fall velocity for genuinely horizontal wall corrections.
+            // A meaningful Y correction is the authoritative motor placing the feet
+            // on a floor after a drop. Retaining the old downward velocity here made
+            // the client fall through that same floor again every frame, producing an
+            // endless correction loop even though the server had valid support.
+            if (verticalLandingCorrection)
+            {
+                _hasAuthoritativeFloor = true;
+                _authoritativeFloorY = position.y;
+                _authoritativeFloorAnchor = position;
+                _authoritativeFloorExpiresAt = Time.time + 0.2f;
+                _verticalVelocity = -1f;
+                _jumpQueuedUntil = -1f;
+                _jumpInProgress = false;
+                _lastGroundedAt = Time.time;
+            }
+            else if (ceilingCorrection)
+            {
+                _hasAuthoritativeFloor = false;
+                _verticalVelocity = 0f;
+                _jumpQueuedUntil = -1f;
+            }
+        }
+
+        private void RestoreAuthoritativeFloorContact()
+        {
+            if (_controller == null)
+                return;
+            float error = _authoritativeFloorY - transform.position.y;
+            if (Mathf.Abs(error) <= 0.001f)
+                return;
+
+            // CharacterController.Move cannot reliably escape when the capsule is
+            // already overlapping a floor after a wall/ledge collision. Depenetrate
+            // from every server-confirmed support by rebuilding the capsule just
+            // above the floor, then settle through the controller. This is a global
+            // movement rule and is deliberately independent of dungeon/module type.
+            bool wasEnabled = _controller.enabled;
+            if (wasEnabled) _controller.enabled = false;
+            Vector3 recovered = transform.position;
+            recovered.y = _authoritativeFloorY + 0.06f;
+            transform.position = recovered;
+            if (wasEnabled) _controller.enabled = true;
+            Physics.SyncTransforms();
+            if (wasEnabled)
+                _controller.Move(Vector3.down * 0.08f);
         }
 
         public void RecenterCameraBehindCharacter()
@@ -530,7 +760,17 @@ namespace AO.Unity.World
             bool walking = _appearanceController != null && _appearanceController.IsWalkModeEnabled;
             float baseSpeed = walking ? walkSpeed : moveSpeed;
             float speed = baseSpeed * ((!walking && IsSprinting()) ? sprintMultiplier : 1f);
-            Vector3 desiredVelocity = wish * speed;
+            Vector3 desiredVelocity = FilterCollisionBlockedIntent(wish) * speed;
+
+            if (_movementBlockedByCollision && (wish.sqrMagnitude <= 0.0001f
+                || Vector3.Dot(wish, _blockedMovementDirection) <= 0f))
+            {
+                // Do not spend the steering acceleration window pushing into
+                // the old wall while the player is already trying to escape it.
+                _movementBlockedByCollision = false;
+                _blockedMovementDirection = Vector3.zero;
+                _planarVelocity = Vector3.zero;
+            }
 
             // AO stops translation as soon as the final movement flag is released.
             // Do not let the acceleration model turn key-up into a visible glide.
@@ -555,6 +795,8 @@ namespace AO.Unity.World
                 _planarVelocity = Vector3.MoveTowards(
                     _planarVelocity, desiredVelocity, maxDelta);
             }
+
+            if (_movementBlockedByCollision) _planarVelocity = FilterCollisionBlockedIntent(_planarVelocity);
 
             float stopEpsilon = Mathf.Max(0f, movementStopEpsilon);
             if (_planarVelocity.sqrMagnitude < stopEpsilon * stopEpsilon)
@@ -633,7 +875,8 @@ namespace AO.Unity.World
             if ((collisionFlags & CollisionFlags.Sides) != 0)
             {
                 _movementBlockedByCollision = true;
-                _blockedMovementDirection = movementIntent.normalized;
+                _blockedMovementDirection = _wallContactNormals.Count > 0
+                    ? -_wallContactNormals[0] : movementIntent.normalized;
                 _authoritativeTargetPosition = transform.position;
                 _hasAuthoritativeTarget = false;
                 return;
@@ -662,6 +905,24 @@ namespace AO.Unity.World
                 float offset = (_controller != null ? _controller.height * 0.5f : 1f) + 0.05f;
                 transform.position = hit.point + Vector3.up * offset;
             }
+        }
+
+        private bool ProbeGroundBelowFeet(float distance)
+        {
+            Vector3 origin = transform.position + Vector3.up * 0.12f;
+            int hits = Physics.RaycastNonAlloc(origin, Vector3.down, _groundProbeHits,
+                Mathf.Max(0.05f, distance + 0.12f), ~0, QueryTriggerInteraction.Ignore);
+            float nearest = float.PositiveInfinity;
+            for (int i = 0; i < hits; i++)
+            {
+                Collider collider = _groundProbeHits[i].collider;
+                if (collider == null || collider == _controller
+                    || collider.transform == transform || collider.transform.IsChildOf(transform))
+                    continue;
+                if (_groundProbeHits[i].normal.y < 0.45f) continue;
+                nearest = Mathf.Min(nearest, _groundProbeHits[i].distance);
+            }
+            return !float.IsInfinity(nearest);
         }
 
         private void ApplyMovementModePresentation()

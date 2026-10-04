@@ -81,16 +81,24 @@ namespace AO.Unity.World
                 return;
 
             _nextRuntimeDynelGlbRetrySweepAt = Time.unscaledTime + Mathf.Max(0.25f, runtimeDynelGlbRetryIntervalSeconds);
-            var states = _activePlayfieldRoot.GetComponentsInChildren<RuntimeDynelGlbFallbackState>(true);
-            if (states == null || states.Length == 0)
+            if (_runtimeDynelGlbFallbackStates.Count == 0)
                 return;
 
             int budget = Mathf.Max(1, runtimeDynelGlbRetryBudgetPerSweep);
-            for (int i = 0; i < states.Length && budget > 0; i++)
+            // Do not traverse the complete playfield hierarchy here. Large outdoor
+            // playfields contain enough transforms for that scan to stall a frame.
+            // Inspect a bounded portion of the explicitly registered retry states.
+            int inspectionBudget = Mathf.Max(32, budget * 4);
+            for (int i = _runtimeDynelGlbFallbackStates.Count - 1;
+                 i >= 0 && budget > 0 && inspectionBudget-- > 0;
+                 i--)
             {
-                var state = states[i];
+                var state = _runtimeDynelGlbFallbackStates[i];
                 if (state == null || state.gameObject == null)
+                {
+                    _runtimeDynelGlbFallbackStates.RemoveAt(i);
                     continue;
+                }
                 if (state.RetryCount >= Mathf.Max(1, runtimeDynelGlbMaxRetriesPerHost))
                 {
                     ShowRuntimePlaceholderVisuals(state.gameObject);

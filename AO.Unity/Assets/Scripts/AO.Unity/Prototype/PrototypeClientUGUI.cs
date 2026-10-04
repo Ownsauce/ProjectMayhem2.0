@@ -14,6 +14,7 @@ using AO.Unity;
 using AO.Unity.World;
 using System.IO;
 using Newtonsoft.Json;
+using AO.Client.World;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem.UI;
 using UnityEngine.InputSystem;
@@ -62,6 +63,11 @@ namespace AO.Unity.Prototype
             public int Weight;
             public string HeadMeshKey;
             public int StartPlayfieldId;
+            public uint CachedAppearanceValue;
+            public int CachedVisualFlags;
+            public int CachedHeadMeshId;
+            public List<AppearanceTexture> CachedAppearanceTextures = new();
+            public List<AppearanceMesh> CachedAppearanceMeshes = new();
             public bool HasLastLocation;
             public float LastAoX;
             public float LastAoY;
@@ -179,8 +185,8 @@ namespace AO.Unity.Prototype
         private Text _topTargetNameText;
         private RectTransform _topTargetHealthBarOutline;
         private readonly List<Image> _topTargetHealthSegments = new();
-        private readonly Dictionary<int, TextMesh> _worldNameplatesByBridgeId = new();
-        private readonly Dictionary<int, float> _worldNameplateYOffsetByBridgeId = new();
+        private readonly Dictionary<EntityId, TextMesh> _worldNameplatesByBridgeId = new();
+        private readonly Dictionary<EntityId, float> _worldNameplateYOffsetByBridgeId = new();
         private CharacterRuntimeBridge[] _cachedRuntimeBridges = Array.Empty<CharacterRuntimeBridge>();
         private float _nextRuntimeBridgeCacheRefreshAt;
         private float _nextWorldNameplateRefreshAt;
@@ -715,6 +721,8 @@ namespace AO.Unity.Prototype
 
         private void HandleTargetSelectionInput(bool textInputFocused)
         {
+            if (AO.Unity.World.Procedural.WorldGenLayoutDebugOverlay.IsOpen)
+                return;
             if (_selfBridge == null || _selfBridge.Character == null)
                 _selfBridge = ResolvePreferredSelfBridgeInScene();
 
@@ -2227,7 +2235,7 @@ namespace AO.Unity.Prototype
             bool positioned = false;
             {
                 float yOffset = 2f;
-                if (!_worldNameplateYOffsetByBridgeId.TryGetValue(target.GetInstanceID(), out yOffset))
+                if (!_worldNameplateYOffsetByBridgeId.TryGetValue(target.GetEntityId(), out yOffset))
                 {
                     var renderer = target.GetComponentInChildren<Renderer>();
                     if (renderer != null)
@@ -2242,7 +2250,7 @@ namespace AO.Unity.Prototype
                 {
                     _targetMarkerRoot.anchoredPosition = local;
                     float nameWidth = 0f;
-                    if (_worldNameplatesByBridgeId.TryGetValue(target.GetInstanceID(), out var worldText) && worldText != null)
+                    if (_worldNameplatesByBridgeId.TryGetValue(target.GetEntityId(), out var worldText) && worldText != null)
                         nameWidth = MeasureWorldNameplateScreenWidth(worldText, Camera.main);
                     if (nameWidth <= 1f)
                         nameWidth = MeasureLabelWidth(ResolveTargetName(target), _targetMarkerText);
@@ -2359,14 +2367,14 @@ namespace AO.Unity.Prototype
                 _nextRuntimeBridgeCacheRefreshAt = Time.unscaledTime + 0.35f;
             }
             var bridges = _cachedRuntimeBridges;
-            var liveIds = new HashSet<int>();
+            var liveIds = new HashSet<EntityId>();
             for (int i = 0; i < bridges.Length; i++)
             {
                 var bridge = bridges[i];
                 if (bridge == null || bridge.gameObject == null)
                     continue;
 
-                int id = bridge.GetInstanceID();
+                EntityId id = bridge.GetEntityId();
                 liveIds.Add(id);
                 if (!_worldNameplatesByBridgeId.TryGetValue(id, out var text) || text == null)
                 {
@@ -2427,7 +2435,7 @@ namespace AO.Unity.Prototype
             var stale = _worldNameplatesByBridgeId.Keys.Where(k => !liveIds.Contains(k)).ToList();
             for (int i = 0; i < stale.Count; i++)
             {
-                int id = stale[i];
+                EntityId id = stale[i];
                 if (_worldNameplatesByBridgeId.TryGetValue(id, out var text) && text != null)
                     Destroy(text.gameObject);
                 _worldNameplatesByBridgeId.Remove(id);

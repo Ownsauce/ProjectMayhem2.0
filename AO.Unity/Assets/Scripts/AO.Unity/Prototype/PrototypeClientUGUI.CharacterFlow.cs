@@ -32,6 +32,7 @@ namespace AO.Unity.Prototype
             public Quaternion TargetRotation = Quaternion.identity;
             public Vector3 TargetLocalScale = Vector3.one;
             public int VisualRevision;
+            public string AppliedProfileSignature = string.Empty;
         }
 
         private sealed class ProfessionPreviewActor
@@ -149,21 +150,28 @@ namespace AO.Unity.Prototype
             _gameServerSession = GetComponent<AOGameServerSession>();
             if (_gameServerSession == null)
                 _gameServerSession = gameObject.AddComponent<AOGameServerSession>();
+            _context.ServerSession = _gameServerSession;
             _gameServerSession.InventoryChanged -= HandleServerInventoryChanged;
             _gameServerSession.InventoryChanged += HandleServerInventoryChanged;
             _gameServerSession.CharacterStateChanged -= HandleServerCharacterStateChanged;
             _gameServerSession.CharacterStateChanged += HandleServerCharacterStateChanged;
+            // The session can finish its initial snapshot before this view subscribes.
+            // Replay current state so wear/inventory windows never require a later move to hydrate.
+            HandleServerInventoryChanged(_gameServerSession.CurrentInventory);
+            HandleServerCharacterStateChanged(_gameServerSession.CurrentCharacterState);
             _characterSelectionRoot.gameObject.SetActive(false);
             BuildConnectionSetup(overlayParent, font);
         }
 
         private void HandleServerInventoryChanged(InventorySnapshot snapshot)
         {
+            if (snapshot == null) return;
             _context?.ApplyServerInventory(snapshot);
         }
 
         private void HandleServerCharacterStateChanged(CharacterStateSnapshot snapshot)
         {
+            if (snapshot == null) return;
             _context?.ApplyServerCharacterState(snapshot);
         }
 
@@ -483,6 +491,8 @@ namespace AO.Unity.Prototype
 
         private void SubmitConnectionSetup()
         {
+            if (_connectionContinueButton != null && !_connectionContinueButton.interactable)
+                return;
             string username = _connectionUsernameInput?.text?.Trim() ?? string.Empty;
             string password = _connectionPasswordInput?.text ?? string.Empty;
             if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
@@ -543,7 +553,7 @@ namespace AO.Unity.Prototype
                 _authoritativeClient.enabled = false;
             EnableExternalServerViewerMovement();
 
-            _characterSelectionView?.SetConnectionStatus("Connecting to AORebirth Local...");
+            _characterSelectionView?.SetConnectionStatus($"Connecting to {_gameServerSession.ServerDisplayName}...");
             try
             {
                 IReadOnlyList<CharacterSummary> characters =
@@ -578,6 +588,11 @@ namespace AO.Unity.Prototype
                     profile.HeadMeshKey = saved.HeadMeshKey ?? string.Empty;
                     profile.Height = saved.Height;
                     profile.Weight = saved.Weight;
+                    profile.CachedAppearanceValue = saved.CachedAppearanceValue;
+                    profile.CachedVisualFlags = saved.CachedVisualFlags;
+                    profile.CachedHeadMeshId = saved.CachedHeadMeshId;
+                    profile.CachedAppearanceTextures = saved.CachedAppearanceTextures?.ToList() ?? new List<AppearanceTexture>();
+                    profile.CachedAppearanceMeshes = saved.CachedAppearanceMeshes?.ToList() ?? new List<AppearanceMesh>();
                 }
                 foreach (var profile in profiles)
                     EnsureProfileHasHead(profile);
@@ -585,12 +600,16 @@ namespace AO.Unity.Prototype
                 // replace the view's profiles so characters from the previous account
                 // cannot remain visible after switching servers or accounts.
                 _characterSelectionView?.SetProfiles(profiles);
+                if (_connectionSetupRoot != null)
+                    _connectionSetupRoot.gameObject.SetActive(false);
+                if (_characterSelectionRoot != null)
+                {
+                    _characterSelectionRoot.gameObject.SetActive(true);
+                    _characterSelectionRoot.SetAsLastSibling();
+                }
                 if (profiles.Count > 0)
                 {
-                    _characterSelectionView?.SetConnectionStatus(
-                        $"Loading {profiles.Count} character appearance(s)...");
                     HandleCharacterSelectionChanged(0);
-                    await WaitForVisibleCharacterPreviewsAsync();
                 }
                 else
                 {
@@ -608,6 +627,10 @@ namespace AO.Unity.Prototype
             {
                 Debug.LogException(exception);
                 SetConnectionSetupStatus(exception.Message, false);
+                _characterSelectionView?.SetConnectionStatus(exception.Message);
+            }
+            finally
+            {
                 if (_connectionContinueButton != null)
                     _connectionContinueButton.interactable = true;
             }
@@ -700,6 +723,11 @@ namespace AO.Unity.Prototype
                         ? (CharacterSelectionWindowView.BodyWeightPreset)entry.Weight
                         : CharacterSelectionWindowView.BodyWeightPreset.Medium,
                     HeadMeshKey = entry.HeadMeshKey ?? string.Empty,
+                    CachedAppearanceValue = entry.CachedAppearanceValue,
+                    CachedVisualFlags = entry.CachedVisualFlags,
+                    CachedHeadMeshId = entry.CachedHeadMeshId,
+                    CachedAppearanceTextures = entry.CachedAppearanceTextures?.ToList() ?? new List<AppearanceTexture>(),
+                    CachedAppearanceMeshes = entry.CachedAppearanceMeshes?.ToList() ?? new List<AppearanceMesh>(),
                     StartPlayfieldId = entry.StartPlayfieldId <= 0 ? 4604 : entry.StartPlayfieldId
                 });
             }
@@ -755,11 +783,18 @@ namespace AO.Unity.Prototype
                 : null;
             selectedAppearance?.PrewarmCurrentVisual();
             selectedAppearance?.SetBodyVisualVisible(false);
+            _context?.ResetServerSnapshotHydration();
             try
             {
                 Debug.Log($"[WorldEntry] Requesting zone handoff for '{profile.Name}'.");
                 AOGameServerSession.ZoneSnapshot zone =
                     await _gameServerSession.EnterWorldAsync(profile.ServerCharacterId);
+                // World entry owns the authoritative initial snapshots. Apply them here
+                // as well as through events so UI hydration cannot be lost if the view's
+                // subscription is rebuilt or disabled during the async zone transition.
+                HandleServerInventoryChanged(_gameServerSession.CurrentInventory);
+                HandleServerCharacterStateChanged(_gameServerSession.CurrentCharacterState);
+                CacheSelectedServerAppearance(profile, zone.Entities);
                 Debug.Log($"[WorldEntry] Zone bootstrap received: PF {zone.Bootstrap.PlayfieldId}.");
                 profile.StartPlayfieldId = zone.Bootstrap.PlayfieldId;
                 if (_selfBridge != null)
@@ -767,19 +802,26 @@ namespace AO.Unity.Prototype
                 bool validBootstrapPosition = float.IsFinite(zone.Bootstrap.X)
                     && float.IsFinite(zone.Bootstrap.Y)
                     && float.IsFinite(zone.Bootstrap.Z)
-                    && zone.Bootstrap.X >= 0f
-                    && zone.Bootstrap.Z >= 0f
+                    && (zone.Bootstrap.PlayfieldId >= 900000
+                        || (zone.Bootstrap.X >= 0f && zone.Bootstrap.Z >= 0f))
                     && zone.Bootstrap.Y > -100f
                     && zone.Bootstrap.Y < 10000f;
                 bool loadedPlayfield = bootstrap != null && _selfBridge != null
-                    && bootstrap.TransitionToPlayfield(
-                        zone.Bootstrap.PlayfieldId,
-                        _selfBridge.transform,
-                        validBootstrapPosition
-                            ? new Vector3(zone.Bootstrap.X, zone.Bootstrap.Y, zone.Bootstrap.Z)
-                            : null,
-                        explicitYaw: null,
-                        preferTeleportDefault: false);
+                    && (zone.Bootstrap.PlayfieldId >= 900000
+                        ? (((_gameServerSession.ActiveProceduralLayout?.Manifest.GeneratorId == "native-playfield-copy"
+                            || _gameServerSession.ActiveProceduralLayout?.Manifest.GeneratorId == WorldGen.Dungeons.NativeRoomDungeon.GeneratorId)
+                            && bootstrap.ActivePlayfieldId == zone.Bootstrap.PlayfieldId)
+                            || bootstrap.TransitionToProceduralPlayfield(
+                                zone.Bootstrap.PlayfieldId, _selfBridge.transform,
+                                new Vector3(zone.Bootstrap.X, zone.Bootstrap.Y, zone.Bootstrap.Z)))
+                        : bootstrap.TransitionToPlayfield(
+                            zone.Bootstrap.PlayfieldId,
+                            _selfBridge.transform,
+                            validBootstrapPosition
+                                ? new Vector3(zone.Bootstrap.X, zone.Bootstrap.Y, zone.Bootstrap.Z)
+                                : null,
+                            explicitYaw: null,
+                            preferTeleportDefault: false));
                 if (loadedPlayfield)
                 {
                     // GLB playfields defer the authoritative spawn until all renderers and
@@ -827,11 +869,13 @@ namespace AO.Unity.Prototype
                         }
                     }
 
-                    if (loadedPlayfield && !bootstrap.EnsureCharacterOnPlayfieldSurface(_selfBridge.transform))
+                    if (loadedPlayfield && zone.Bootstrap.PlayfieldId < 900000
+                        && !bootstrap.EnsureCharacterOnPlayfieldSurface(_selfBridge.transform))
                         Debug.LogWarning($"[AO.Client] No walkable surface found near the PF {zone.Bootstrap.PlayfieldId} spawn.");
                     if (loadedPlayfield)
                     {
-                        _gameServerSession.SetWorldOriginOffset(sessionOriginWorld);
+                        _gameServerSession.SetWorldOriginOffset(zone.Bootstrap.PlayfieldId >= 900000
+                            ? Vector3.zero : sessionOriginWorld);
                         _gameServerSession.SetTemporaryFloorVisible(false);
                     }
                 }
@@ -881,8 +925,10 @@ namespace AO.Unity.Prototype
         private void CompleteCharacterPlay(CharacterSelectionWindowView.CharacterProfile profile,
             bool transitionPrototypePlayfield = true)
         {
-
-            ApplyCharacterProfile(profile);
+            // Server entry applied the preview identity before hydration. Reapplying
+            // it here overwrites authoritative stats with the offline baselines.
+            if (transitionPrototypePlayfield)
+                ApplyCharacterProfile(profile);
             _activeProfileName = string.IsNullOrWhiteSpace(profile.Name) ? "PrototypeCharacter" : profile.Name.Trim();
             Debug.Log($"[Prefs] Play selected '{_activeProfileName}'. Deferring layout apply until UI is stable.");
             if (transitionPrototypePlayfield)
@@ -1410,10 +1456,15 @@ namespace AO.Unity.Prototype
 
                 var profile = profiles[profileIndex];
                 EnsureProfileHasHead(profile);
+                string profileSignature = $"{profile.Name}|{profile.BreedId}|{(int)profile.Sex}|"
+                    + $"{(int)profile.Height}|{(int)profile.Weight}|{profile.HeadMeshKey}";
                 bool actorAlreadyMatches = string.Equals(
-                    slot.Bridge.DisplayNameOverride, profile.Name, StringComparison.Ordinal);
+                    slot.AppliedProfileSignature, profileSignature, StringComparison.Ordinal);
                 if (!actorAlreadyMatches)
+                {
                     ApplyProfileToPreviewSlot(slot, profile);
+                    slot.AppliedProfileSignature = profileSignature;
+                }
             }
 
             UpdateCharacterSelectionCarouselLayout(_carouselSelectedIndex < 0 || Math.Abs(delta) > 1);
@@ -1469,6 +1520,12 @@ namespace AO.Unity.Prototype
             if (slot.NameLabel != null)
                 slot.NameLabel.text = profile.Name ?? string.Empty;
             slot.Appearance?.PrewarmCurrentVisual();
+            // The character list does not include an authoritative wear-slot snapshot.
+            // Cached SCFU meshes can therefore be stale after an equip/unequip and the
+            // server-appearance socket path also bypasses the locally calibrated weapon
+            // transform. Keep caching appearance metadata for breed/body/head selection,
+            // but never present cached attachments as if they were current equipment.
+            slot.Transform.GetComponent<ServerAppearanceVisualController>()?.ClearAppearance();
             if (slot.Appearance != null
                 && (!slot.Appearance.IsCurrentBodyVisualReady
                     || !slot.Appearance.IsCurrentHeadVisualReady))
@@ -1476,6 +1533,36 @@ namespace AO.Unity.Prototype
                 slot.Appearance.SetBodyVisualVisible(false);
                 _ = RevealPreviewWhenReadyAsync(slot, visualRevision);
             }
+        }
+
+        private static void CacheSelectedServerAppearance(
+            CharacterSelectionWindowView.CharacterProfile profile,
+            IReadOnlyList<NearbyEntity> entities)
+        {
+            if (profile == null || entities == null
+                || !int.TryParse(profile.ServerCharacterId, out int characterId)) return;
+            NearbyEntity selected = entities.FirstOrDefault(entity =>
+                entity != null && entity.IdentityInstance == characterId
+                && entity.EquipmentAppearance != null);
+            if (selected == null) return;
+            profile.CachedAppearanceValue = selected.Appearance;
+            profile.CachedVisualFlags = selected.EquipmentAppearance.VisualFlags;
+            profile.CachedHeadMeshId = selected.EquipmentAppearance.HeadMeshId ?? 0;
+            profile.CachedAppearanceTextures = selected.EquipmentAppearance.Textures.ToList();
+            profile.CachedAppearanceMeshes = selected.EquipmentAppearance.Meshes.ToList();
+            int breed = (int)((selected.Appearance >> 5) & 7);
+            int gender = (int)((selected.Appearance >> 8) & 3);
+            if (breed >= 1 && breed <= 4)
+            {
+                profile.BreedId = breed;
+                profile.Sex = breed == 4 ? CharacterRuntimeBridge.CharacterSex.Uni
+                    : gender == 3 ? CharacterRuntimeBridge.CharacterSex.Female
+                    : CharacterRuntimeBridge.CharacterSex.Male;
+                profile.BreedLabel = ResolveBreedLabel(profile.BreedId, (int)profile.Sex);
+            }
+            int fatness = (int)((selected.Appearance >> 3) & 3);
+            if (fatness >= 0 && fatness <= 2)
+                profile.Weight = (CharacterSelectionWindowView.BodyWeightPreset)fatness;
         }
 
         private static async Task RevealPreviewWhenReadyAsync(CharacterPreviewSlot slot, int visualRevision)
@@ -2049,9 +2136,11 @@ namespace AO.Unity.Prototype
             walker.enabled = _savedWalkerEnabled;
         }
 
-        private void OnChatCommandIssued(string commandText)
+        private async void OnChatCommandIssued(string commandText)
         {
             string cmd = (commandText ?? string.Empty).Trim();
+            while (cmd.StartsWith(".", StringComparison.Ordinal))
+                cmd = cmd.Substring(1).TrimStart();
             if (string.IsNullOrWhiteSpace(cmd))
                 return;
 
@@ -2061,7 +2150,27 @@ namespace AO.Unity.Prototype
                 return;
             }
 
-            _context?.PublishStatus($"Unknown command: {cmd}");
+            if (string.Equals(cmd, "worldgen layout", StringComparison.OrdinalIgnoreCase))
+            {
+                _gameServerSession?.ToggleWorldGenLayoutOverlay();
+                return;
+            }
+
+            if (_gameServerSession == null)
+            {
+                _context?.PublishStatus("Cannot send command: no game-server session.");
+                return;
+            }
+
+            try
+            {
+                await _gameServerSession.SendChatTextAsync("." + cmd);
+                _context?.PublishStatus($"Command sent: .{cmd}");
+            }
+            catch (Exception exception)
+            {
+                _context?.PublishStatus($"Command send failed: {exception.Message}");
+            }
         }
 
         private void EnterCharacterSelectFromCamp()

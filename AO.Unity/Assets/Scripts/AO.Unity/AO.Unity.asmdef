@@ -3,11 +3,13 @@
     "rootNamespace": "",
     "references": [
         "AO.Assets",
+        "WorldGen.Geometry",
         "GUID:0a314f6dcfd3ef34594f563ee8b6f2f8",
         "GUID:af957c4ff03497e43a033c07c621478d",
         "GUID:75469ad4d38634e559750d17036d5f7c",
         "GUID:eeadd3a546fa7174795b279325490c9e",
         "GUID:db27813e65e11ca40974a8d0ee14a28a",
+        "GUID:23ad2ebe3a9f719358f1dfe280d5a226",
         "glTFast"
     ],
     "includePlatforms": [],

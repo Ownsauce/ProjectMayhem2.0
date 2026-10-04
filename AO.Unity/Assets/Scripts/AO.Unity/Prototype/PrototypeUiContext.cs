@@ -411,11 +411,109 @@ namespace AO.Unity.Prototype
             SetStatus($"Starter backpack loaded in inventory: {firstBackpack.Definition.Name}");
         }
 
+        public AOGameServerSession ServerSession { get; set; }
+        private bool _hasNativeInventory;
+        private bool _hasNativeEquipment;
+        private int _nativeMoveVersion;
+        private bool _nativeMovePending;
+        private bool HasNativeSession => _hasNativeInventory
+            || (ServerSession != null && ServerSession.IsAuthenticated);
+
+        public void ResetServerSnapshotHydration()
+        {
+            _hasNativeInventory = false;
+            _hasNativeEquipment = false;
+            _nativeMovePending = false;
+            ++_nativeMoveVersion;
+        }
+
+        private async void SendNativeItemMove(ItemLocation source, ItemLocation destination)
+        {
+            if (_nativeMovePending) { SetStatus("Waiting for the previous item move confirmation."); return; }
+            _nativeMovePending = true;
+            int version = ++_nativeMoveVersion;
+            SetStatus("Item move requested; waiting for server confirmation.");
+            Debug.Log($"[Equipment] Native move requested: {source.Area}[{source.Index}] -> "
+                + $"{destination.Area}[{destination.Index}].");
+            try
+            {
+                await ServerSession.MoveItemAsync(source, destination);
+                await System.Threading.Tasks.Task.Delay(15000);
+                if (_nativeMovePending && version == _nativeMoveVersion)
+                {
+                    _nativeMovePending = false;
+                    SetStatus("No item move confirmation received. Check server messages before trying again.");
+                    Debug.LogWarning($"[Equipment] No confirmation for native move: "
+                        + $"{source.Area}[{source.Index}] -> {destination.Area}[{destination.Index}].");
+                }
+            }
+            catch (Exception exception)
+            {
+                if (version != _nativeMoveVersion) return;
+                _nativeMovePending = false;
+                SetStatus($"Item move failed: {exception.Message}");
+            }
+        }
+
+        private static ItemLocation NativeWearLocation(int localSlot)
+        {
+            for (int placement = 1; placement < 0x40; placement++)
+            {
+                if ((placement & 15) == 0) continue;
+                int mapped = placement >= 0x31 ? placement - 0x30 + SocialSlotOffset
+                    : NormalizeServerWearSlot(placement);
+                if (mapped == localSlot)
+                    return new ItemLocation((ItemArea)(placement / 16), (placement & 15) - 1);
+            }
+            return null;
+        }
+
+        private bool TryNativeUnequip(int slot, SlotZone zone, int index, out string reason)
+        {
+            reason = string.Empty;
+            var source = NativeWearLocation(slot);
+            if (zone != SlotZone.Inventory || source == null || index < 0
+                || index >= Character.Inventory.Main.Capacity || GetSlotItem(zone, index) != null
+                || !(slot > SocialSlotOffset ? _socialEquipped.ContainsKey(slot) : GetEquipped().ContainsKey(slot)))
+            {
+                reason = "Choose an equipped item and an empty main inventory slot; backpack transfers are not connected yet.";
+                SetStatus(reason);
+                return false;
+            }
+            SendNativeItemMove(source, new ItemLocation(ItemArea.Inventory, index));
+            return true;
+        }
+
+        private bool TryNativeEquip(long instanceId, int? preferredSlot, bool strictPreferredSlot)
+        {
+            var core = AODataManager.Instance.GetCoreInstance(instanceId);
+            var data = AODataManager.Instance.GetItemInstance(instanceId);
+            int index = -1;
+            for (int i = 0; i < Character.Inventory.Main.Capacity; i++)
+                if (Character.Inventory.Main.Slots[i]?.InstanceId == instanceId) { index = i; break; }
+            if (index < 0 || core?.Definition == null || data?.Definition == null)
+            {
+                SetStatus("Equip requires an item in your main inventory.");
+                return false;
+            }
+            var candidates = strictPreferredSlot && preferredSlot.HasValue
+                ? new List<int> { preferredSlot.Value }
+                : ResolveEquipSlotCandidates(core.Definition, data).ToList();
+            if (!strictPreferredSlot && preferredSlot.HasValue) candidates.Insert(0, preferredSlot.Value);
+            var destination = candidates.Select(NativeWearLocation).FirstOrDefault(location => location != null);
+            if (destination == null) { SetStatus("No supported equipment slot found."); return false; }
+            SendNativeItemMove(new ItemLocation(ItemArea.Inventory, index), destination);
+            return true;
+        }
+
         public void ApplyServerInventory(InventorySnapshot snapshot)
         {
             if (snapshot == null || !snapshot.IsMainInventory || Character?.Inventory == null)
                 return;
 
+            _hasNativeInventory = true;
+            _nativeMovePending = false;
+            ++_nativeMoveVersion;
             for (int slot = 0; slot < Character.Inventory.Main.Capacity; slot++)
                 Character.Inventory.TryRemoveFromMain(slot, out _);
             Character.Inventory.Items.Clear();
@@ -474,7 +572,10 @@ namespace AO.Unity.Prototype
             if (snapshot == null || Character == null)
                 return;
 
-            if (snapshot.IsStatUpdateOnly)
+            // A stat delta retains the last FullCharacter slots. If initial UI
+            // hydration missed the full snapshot, use those retained slots once
+            // before treating subsequent packets as stats-only updates.
+            if (snapshot.IsStatUpdateOnly && _hasNativeEquipment)
             {
                 Character.ApplyAuthoritativeStats(snapshot.Stats,
                     statId => AODataManager.Instance?.GetStatName(statId));
@@ -522,10 +623,15 @@ namespace AO.Unity.Prototype
                 resolvedCount++;
             }
             Character.ApplyAuthoritativeEquipment(equipped);
+            _hasNativeEquipment = true;
             Character.ApplyAuthoritativeStats(snapshot.Stats,
                 statId => AODataManager.Instance?.GetStatName(statId));
             ApplyServerUploadedPrograms(snapshot.UploadedNanoIds);
             NotifyStateChanged();
+            Debug.Log($"[Equipment] Applied authoritative wear snapshot: "
+                + $"wire={snapshot.Slots.Count}, resolved={resolvedCount}, gameplay={equipped.Count}, "
+                + $"social={_socialEquipped.Count}; slots="
+                + string.Join(",", equipped.Select(pair => $"{pair.Key}:{pair.Value}")) + ".");
             SetStatus($"Server character state synchronized: {resolvedCount} worn items, "
                 + $"{_uploadedPrograms.Count} uploaded programs, {snapshot.Stats.Count} stats. "
                 + $"IP={Character.AvailableIp}, HP={Character.StatsContainer.GetBaseStat(StatIds.Health)}/"
@@ -964,6 +1070,8 @@ namespace AO.Unity.Prototype
             int canFlags = Mathf.Max(0, GetRawStatValue(raw, CanFlagStatId));
             if ((canFlags & UseCanBit) == 0)
                 return false;
+
+            if (HasNativeSession) { SetStatus("Server item use is not connected yet."); return true; }
 
             if (!CanUseItemNow(raw, out string blockReason))
             {
@@ -1795,6 +1903,7 @@ namespace AO.Unity.Prototype
 
         public bool TryDeleteItemFromZone(SlotZone zone, int slotIndex)
         {
+            if (HasNativeSession) { SetStatus("Server item deletion is not connected yet."); return false; }
             if (Character == null || slotIndex < 0)
                 return false;
             if (_networkClient != null && _networkClient.IsConnected)
@@ -1817,6 +1926,22 @@ namespace AO.Unity.Prototype
 
         public bool TryMoveItem(SlotZone fromZone, int fromIndex, SlotZone toZone, int toIndex, out string reason)
         {
+            if (HasNativeSession)
+            {
+                reason = string.Empty;
+                if (fromZone != SlotZone.Inventory || toZone != SlotZone.Inventory
+                    || fromIndex < 0 || toIndex < 0 || fromIndex >= Character.Inventory.Main.Capacity
+                    || toIndex >= Character.Inventory.Main.Capacity || fromIndex == toIndex
+                    || GetSlotItem(fromZone, fromIndex) == null || GetSlotItem(toZone, toIndex) != null)
+                {
+                    reason = "Choose an item and an empty main inventory slot; stacking and backpack transfers are not connected yet.";
+                    SetStatus(reason);
+                    return false;
+                }
+                SendNativeItemMove(new ItemLocation(ItemArea.Inventory, fromIndex),
+                    new ItemLocation(ItemArea.Inventory, toIndex));
+                return true;
+            }
             reason = string.Empty;
 
             if (fromZone == toZone && fromIndex == toIndex)
@@ -1886,6 +2011,7 @@ namespace AO.Unity.Prototype
 
         public bool TryMoveEquippedItemToZone(int fromEquipSlotId, SlotZone toZone, int toIndex, out string reason)
         {
+            if (HasNativeSession) return TryNativeUnequip(fromEquipSlotId, toZone, toIndex, out reason);
             reason = string.Empty;
 
             if (Character == null)
@@ -1960,6 +2086,14 @@ namespace AO.Unity.Prototype
 
         public void UnequipSlot(int slotId)
         {
+            if (HasNativeSession)
+            {
+                int empty = -1;
+                for (int i = 0; i < Character.Inventory.Main.Capacity; i++)
+                    if (Character.Inventory.Main.Slots[i] == null) { empty = i; break; }
+                TryNativeUnequip(slotId, SlotZone.Inventory, empty, out _);
+                return;
+            }
             if (_networkClient != null && _networkClient.IsConnected)
             {
                 if (slotId > WeaponNonHandSlotOffset && slotId < WeaponNonHandSlotOffset + 100)
@@ -2444,6 +2578,7 @@ namespace AO.Unity.Prototype
             SlotZone? sourceZone = null,
             int sourceIndex = -1)
         {
+            if (HasNativeSession) return TryNativeEquip(instanceId, preferredSlot, strictPreferredSlot);
             if (_networkClient != null && _networkClient.IsConnected)
             {
                 var dataItem = AODataManager.Instance.GetItemInstance(instanceId);
@@ -3850,6 +3985,8 @@ namespace AO.Unity.Prototype
                 }
                 return false;
             }
+
+            if (HasNativeSession) { SetStatus("Server nano uploading is not connected yet."); return true; }
 
             if (_uploadedProgramIds.Contains(nanoId))
             {
@@ -5624,6 +5761,7 @@ namespace AO.Unity.Prototype
 
         private void ToggleBackpack(long instanceId, string fallbackName)
         {
+            if (HasNativeSession) { SetStatus("Server backpack contents are not connected yet."); return; }
             if (OpenBackpackId == instanceId)
             {
                 CloseOpenBackpack();
@@ -5731,6 +5869,7 @@ namespace AO.Unity.Prototype
             SlotZone? sourceZone = null,
             int sourceIndex = -1)
         {
+            if (HasNativeSession) return TryNativeEquip(instanceId, socialSlotId, true);
             if (_networkClient != null && _networkClient.IsConnected)
             {
                 SetStatus("Social equip blocked: AO.Server is authoritative while connected.");
@@ -5808,6 +5947,7 @@ namespace AO.Unity.Prototype
 
         public void UnequipSocialSlot(int socialSlotId)
         {
+            if (HasNativeSession) { UnequipSlot(socialSlotId); return; }
             if (_networkClient != null && _networkClient.IsConnected)
             {
                 SetStatus("Social unequip blocked: AO.Server is authoritative while connected.");

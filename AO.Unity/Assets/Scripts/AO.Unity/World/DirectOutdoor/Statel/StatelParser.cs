@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
+using AO.Assets.Decoders;
 using AODB.Common.DbClasses;
 using AODB.Common.RDBObjects;
 using UnityEngine;
@@ -27,8 +28,60 @@ public sealed class StatelParser
         _materials = materials ?? new AbiffMaterialFactory(database);
     }
 
+    public int CreatedPlacements { get; private set; }
+
+    public void ClearMeshes()
+    {
+        foreach (var meshes in _unityMeshCache.Values)
+            foreach (var mesh in meshes) if (mesh != null) { if (Application.isPlaying) UnityEngine.Object.Destroy(mesh); else UnityEngine.Object.DestroyImmediate(mesh); }
+        _unityMeshCache.Clear();
+    }
+
     public IEnumerator BuildCoroutine(int playfieldId, Transform parent)
     {
+        if (_database?.Rdb == null)
+        {
+            Debug.LogError("StatelParser: ResourceDatabase is not initialized.");
+            yield break;
+        }
+        yield return BuildPlacementsCoroutine(playfieldId, parent, ParsePlacements(playfieldId));
+    }
+
+    public IEnumerator BuildIndoorCoroutine(AOPlayfieldDefinition definition, Transform parent, ISet<int> selectedRooms = null)
+    {
+        if (_database?.Rdb == null) throw new InvalidOperationException("Indoor ResourceDatabase is not initialized");
+        if (definition == null || !definition.IsIndoor) throw new ArgumentException("An indoor definition is required", nameof(definition));
+        string path = Path.Combine(_database.Rdb.BaseAoPath, "cd_image", "data", "statels", definition.Id + ".pf");
+        if (!File.Exists(path)) throw new FileNotFoundException("Missing local indoor model placements", path);
+        var source = AOIndoorStatelPlacementDecoder.Decode(File.ReadAllBytes(path), definition.RoomCount);
+        var placements = new List<StatelPlacement>(source.Count);
+        foreach (var entry in source)
+        {
+            if (selectedRooms != null && !selectedRooms.Contains(entry.RoomIndex)) continue;
+            var room = definition.Rooms[entry.RoomIndex];
+            var packed = CalculateScaleAndRotation(entry.Flags, entry.ScaleFlags);
+            float x = entry.X, z = entry.Z;
+            switch (room.RotationQuarterTurns & 3)
+            {
+                case 1: x = entry.Z; z = -entry.X; break;
+                case 2: x = -entry.X; z = -entry.Z; break;
+                case 3: x = -entry.Z; z = entry.X; break;
+            }
+            var roomRotation = AxisAngle(Vector3.up, room.RotationQuarterTurns * Mathf.PI / 2f);
+            placements.Add(new StatelPlacement {
+                RoomIndex = entry.RoomIndex, MeshId = entry.MeshId, Position = new Vector3(room.X + x, room.Y + entry.Y, room.Z + z),
+                Rotation = roomRotation * packed.Rotation,
+                Scale = Vector3.one * packed.FinalScale, ShearFactor = packed.ShearFactor,
+                Flag = entry.Flags, Flags2 = entry.ScaleFlags, Transform = packed,
+                TextureOverrides = entry.TextureOverrides
+            });
+        }
+        return BuildPlacementsCoroutine(definition.Id, parent, placements);
+    }
+
+    private IEnumerator BuildPlacementsCoroutine(int playfieldId, Transform parent, List<StatelPlacement> placements)
+    {
+        CreatedPlacements = 0;
         if (_database?.Rdb == null)
         {
             Debug.LogError("StatelParser: ResourceDatabase is not initialized.");
@@ -38,7 +91,6 @@ public sealed class StatelParser
         if (_renderConfig == null)
             Debug.LogWarning("StatelParser: RenderConfig is missing; continuing with defaults.");
 
-        List<StatelPlacement> placements = ParsePlacements(playfieldId);
         if (placements.Count == 0)
             yield break;
 
@@ -75,7 +127,19 @@ public sealed class StatelParser
             if (!_unityMeshCache.TryGetValue(key, out Mesh[] meshes))
                 continue;
 
-            InstantiatePlacement(root.transform, placement, source, meshes, i);
+            Transform placementParent = root.transform;
+            if (placement.RoomIndex >= 0)
+            {
+                string roomName = "Room_" + placement.RoomIndex;
+                placementParent = root.transform.Find(roomName);
+                if (placementParent == null)
+                {
+                    placementParent = new GameObject(roomName).transform;
+                    placementParent.SetParent(root.transform, false);
+                    placementParent.gameObject.AddComponent<AO.Unity.World.NativeRoomSourcePart>().Configure(placement.RoomIndex, AO.Unity.World.NativeRoomPartKind.Models);
+                }
+            }
+            InstantiatePlacement(placementParent, placement, source, meshes, i);
             created++;
 
             if (created % InstantiateBatchSize == 0)
@@ -83,6 +147,8 @@ public sealed class StatelParser
         }
 
         root.isStatic = true;
+        CreatedPlacements = created;
+        Debug.Log($"Local statel models for PF {playfieldId}: placements={placements.Count}, rendered={created}, meshResources={meshSources.Count}.");
     }
 
     void InstantiatePlacement(
@@ -207,18 +273,29 @@ public sealed class StatelParser
         var sources = new Dictionary<int, MeshSource>(uniqueIds.Count);
         foreach (int meshId in uniqueIds)
         {
-            RDBMesh rdbMesh = _database.Get<RDBMesh>(meshId);
-            if (rdbMesh?.SubMeshes == null || rdbMesh.SubMeshes.Count == 0)
+            try
             {
-                Debug.LogWarning($"StatelParser: Missing RDBMesh {meshId}.");
-                continue;
-            }
+                RDBMesh rdbMesh = _database.Get<RDBMesh>(meshId);
+                if (rdbMesh?.SubMeshes == null || rdbMesh.SubMeshes.Count == 0)
+                {
+                    Debug.LogWarning($"StatelParser: Missing RDBMesh {meshId}.");
+                    continue;
+                }
 
-            sources[meshId] = new MeshSource
+                sources[meshId] = new MeshSource
+                {
+                    MeshId = meshId,
+                    Submeshes = AbiffMeshSnapshot.FromRdbMesh(rdbMesh)
+                };
+            }
+            catch (Exception exception)
             {
-                MeshId = meshId,
-                Submeshes = AbiffMeshSnapshot.FromRdbMesh(rdbMesh)
-            };
+                // A single malformed RDB record must not abort the entire playfield load.
+                // Placements using this mesh are omitted because they will not have a source.
+                Debug.LogWarning(
+                    $"StatelParser: Skipping unreadable RDBMesh {meshId}: " +
+                    $"{exception.GetType().Name}: {exception.Message}");
+            }
         }
 
         return sources;
@@ -614,6 +691,7 @@ public sealed class StatelParser
 
     sealed class StatelPlacement
     {
+        public int RoomIndex = -1;
         public int MeshId;
         public Vector3 Position;
         public Quaternion Rotation;

@@ -58,6 +58,11 @@ namespace AO.Client
         Task SendPlayerMovementAsync(PlayerMovementUpdate movement,
             CancellationToken cancellationToken = default);
 
+        Task MoveItemAsync(ItemLocation source, ItemLocation destination,
+            CancellationToken cancellationToken = default);
+
+        Task SendChatTextAsync(string text, CancellationToken cancellationToken = default);
+
         Task DisconnectAsync(CancellationToken cancellationToken = default);
     }
 }

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>false</EnableDefaultCompileItems><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../WorldGen/WorldGen.Core/WorldGen.Core.csproj" />
+    <Compile Include="NativeDoorwayCollision.Tests.cs" />
+    <Compile Include="../AO.Unity/Assets/Scripts/AO.Unity/World/MovementWallSliding.cs" />
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManagedPath)/UnityEngine.CoreModule.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

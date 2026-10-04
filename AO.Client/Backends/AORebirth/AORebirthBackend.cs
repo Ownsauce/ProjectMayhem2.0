@@ -6,6 +6,7 @@ using System.IO;
 using System.Globalization;
 using System.IO.Compression;
 using System.Net.Sockets;
+using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using AO.Client.Authentication;
@@ -23,6 +24,13 @@ namespace AO.Client.Backends.AORebirth
         private TcpClient _client;
         private NetworkStream _stream;
         private Stream _worldStream;
+        private readonly SemaphoreSlim _writeGate = new SemaphoreSlim(1, 1);
+        private ushort _messageId = 1;
+        private bool _sentInPlay;
+        private uint _zoneCookie1;
+        private uint _zoneCookie2;
+        private readonly Queue<string> _bootstrapServerMessages = new Queue<string>();
+
         private sealed class WorldPacketMailbox
         {
             private readonly ConcurrentQueue<AORebirthPacket> _packets =
@@ -72,6 +80,9 @@ namespace AO.Client.Backends.AORebirth
         private bool _inventoryChanged;
         private bool _disposed;
 
+        /// <summary>Hex for a selected-character SCFU that could not be decoded. Contains appearance data only.</summary>
+        public string LastSelectedAppearanceDecodeFailure { get; private set; }
+
         public AORebirthBackend(string clientVersion = "18.8.62",
             string authentication = "aorebirth", string loginPrime = "",
             string loginPublicSeed = "")
@@ -95,7 +106,8 @@ namespace AO.Client.Backends.AORebirth
             | BackendCapabilities.CharacterSelection
             | BackendCapabilities.WorldEntry
             | BackendCapabilities.WorldState
-            | BackendCapabilities.Inventory;
+            | BackendCapabilities.Inventory
+            | BackendCapabilities.ItemMovement;
 
         public ClientConnectionState State { get; private set; } = ClientConnectionState.Disconnected;
 
@@ -112,7 +124,13 @@ namespace AO.Client.Backends.AORebirth
                 throw new ArgumentException("The server endpoint must specify a TCP port.", nameof(endpoint));
 
             await CloseTransportAsync().ConfigureAwait(false);
+            _inventory = null;
+            _characterState = null;
+            _inventoryChanged = false;
+            LastSelectedAppearanceDecodeFailure = null;
             SetState(ClientConnectionState.Connecting, $"Connecting to {endpoint.Name}.");
+            _messageId = 1;
+            _sentInPlay = false;
             try
             {
                 _client = new TcpClient();
@@ -237,9 +255,12 @@ namespace AO.Client.Backends.AORebirth
                     throw new InvalidDataException("AORebirth returned zone information for another character.");
                 SetState(ClientConnectionState.EnteringWorld,
                     $"ZoneInfo received; connecting to {zone.Address}:{zone.Port}.");
+                _zoneCookie1 = zone.Cookie1;
+                _zoneCookie2 = zone.Cookie2;
 
                 await CloseTransportAsync().ConfigureAwait(false);
                 _client = new TcpClient();
+                _messageId = 1;
                 using (cancellationToken.Register(() => _client?.Close()))
                 {
                     await _client.ConnectAsync(zone.Address.ToString(), zone.Port).ConfigureAwait(false);
@@ -308,10 +329,16 @@ namespace AO.Client.Backends.AORebirth
                 }
                 received.Add(
                     $"type=0x{packet.PacketType:X4} body={BitConverter.ToString(packet.Body, 0, Math.Min(12, packet.Body.Length)).Replace("-", string.Empty)}");
+                if (AORebirthProtocol.TryReadChatText(packet, out string startupMessage))
+                    _bootstrapServerMessages.Enqueue(startupMessage);
                 CaptureInventory(packet);
                 CaptureCharacterState(packet);
                 if (!AORebirthProtocol.TryReadPlayfieldBootstrap(packet, out AORebirthPlayfieldBootstrap bootstrap))
+                {
+                    int ignoredMovement = 0, ignoredUnmatched = 0;
+                    ApplyWorldPacket(packet, new List<WorldEntityDelta>(), ref ignoredMovement, ref ignoredUnmatched);
                     continue;
+                }
 
                 if (bootstrap.CharacterId != 0 && !string.Equals(
                         bootstrap.CharacterId.ToString(CultureInfo.InvariantCulture),
@@ -345,7 +372,7 @@ namespace AO.Client.Backends.AORebirth
             if (maximumPackets <= 0 || maximumPackets > 4096)
                 throw new ArgumentOutOfRangeException(nameof(maximumPackets));
 
-            var entities = new Dictionary<string, NearbyEntity>();
+            var entities = new Dictionary<string, NearbyEntity>(_worldEntities);
             int packetsObserved = 0;
             Stopwatch batchClock = Stopwatch.StartNew();
             while (packetsObserved < maximumPackets && batchClock.Elapsed < TimeSpan.FromSeconds(10))
@@ -370,10 +397,24 @@ namespace AO.Client.Backends.AORebirth
                 }
 
                 packetsObserved++;
+                if (AORebirthProtocol.TryReadChatText(packet, out string startupMessage))
+                    _bootstrapServerMessages.Enqueue(startupMessage);
                 CaptureInventory(packet);
                 CaptureCharacterState(packet);
+                if (AORebirthProtocol.TryReadAppearanceUpdate(packet, out int type, out int id, out var appearance))
+                {
+                    string appearanceKey = EntityKey(type, id);
+                    if (_worldEntities.TryGetValue(appearanceKey, out var previous))
+                    {
+                        var updated = previous.WithEquipmentAppearance(appearance);
+                        _worldEntities[appearanceKey] = updated;
+                        entities[appearanceKey] = updated;
+                    }
+                    continue;
+                }
                 if (!AORebirthProtocol.TryReadNearbyEntity(packet, _currentPlayfieldId, out NearbyEntity entity))
                 {
+                    CaptureSelectedAppearanceFailure(packet);
                     if (AORebirthProtocol.TryReadWorldObject(packet, _currentPlayfieldId, out WorldObject worldObject))
                         StoreWorldObject(worldObject);
                     continue;
@@ -385,6 +426,12 @@ namespace AO.Client.Backends.AORebirth
                 ResolveLinkedObjectPositions(entity);
             }
 
+            if (!_sentInPlay && _selectedCharacter != null)
+            {
+                await WritePacketAsync(AORebirthProtocol.CreateCharInPlay(
+                    int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture)), cancellationToken).ConfigureAwait(false);
+                _sentInPlay = true;
+            }
             return new NearbyEntitiesResult(new List<NearbyEntity>(entities.Values), packetsObserved);
         }
 
@@ -397,6 +444,17 @@ namespace AO.Client.Backends.AORebirth
                 throw new InvalidOperationException("Enter the world before requesting world objects.");
             return Task.FromResult<IReadOnlyList<WorldObject>>(
                 new List<WorldObject>(_worldObjects.Values));
+        }
+
+        public async Task MoveItemAsync(ItemLocation source, ItemLocation destination,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null)
+                throw new InvalidOperationException("Enter the world before moving items.");
+            int characterId = int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture);
+            await WritePacketAsync(AORebirthProtocol.CreateItemMove(characterId, source, destination),
+                cancellationToken).ConfigureAwait(false);
         }
 
         public async Task SendPlayerMovementAsync(PlayerMovementUpdate movement,
@@ -415,6 +473,20 @@ namespace AO.Client.Backends.AORebirth
                 cancellationToken).ConfigureAwait(false);
         }
 
+        public async Task SendChatTextAsync(string text, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrWhiteSpace(text))
+                throw new ArgumentException("Chat text is required.", nameof(text));
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null)
+                throw new InvalidOperationException("Enter the world before sending chat text.");
+            if (!int.TryParse(_selectedCharacter.Id, NumberStyles.None,
+                    CultureInfo.InvariantCulture, out int characterId))
+                throw new InvalidDataException("The selected AORebirth character ID is invalid.");
+            await WritePacketAsync(AORebirthProtocol.CreateTextMessage(characterId, text),
+                cancellationToken).ConfigureAwait(false);
+        }
+
         public async Task<WorldDeltaBatch> ReceiveWorldDeltasAsync(
             int maximumPackets,
             CancellationToken cancellationToken = default)
@@ -426,11 +498,13 @@ namespace AO.Client.Backends.AORebirth
                 throw new ArgumentOutOfRangeException(nameof(maximumPackets));
 
             var deltas = new List<WorldEntityDelta>();
+            var serverMessages = new List<string>();
             int packetsObserved = 0;
             int movementPacketsObserved = 0;
             int unmatchedMovementPackets = 0;
             var packetKindsObserved = new Dictionary<string, int>();
             var packetSamplesObserved = new Dictionary<string, string>();
+            WorldBootstrapResult zoneTransfer = null;
             Stopwatch batchClock = Stopwatch.StartNew();
             while (packetsObserved < maximumPackets
                    && batchClock.Elapsed < TimeSpan.FromMilliseconds(100))
@@ -480,25 +554,102 @@ namespace AO.Client.Backends.AORebirth
                     packetSamplesObserved[packetKind] = BitConverter.ToString(packet.Body)
                         .Replace("-", string.Empty);
                 }
+                if (AORebirthProtocol.TryReadZoneRedirection(packet,
+                        out IPAddress redirectAddress, out int redirectPort))
+                {
+                    zoneTransfer = await ReconnectToZoneAsync(
+                        redirectAddress, redirectPort, cancellationToken).ConfigureAwait(false);
+                    serverMessages.Add($"Zone transfer complete: PF {zoneTransfer.PlayfieldId}.");
+                    break;
+                }
                 ApplyWorldPacket(packet, deltas,
                     ref movementPacketsObserved, ref unmatchedMovementPackets);
+                if (AORebirthProtocol.TryReadChatText(packet, out string serverMessage))
+                    serverMessages.Add(serverMessage);
             }
             InventorySnapshot inventory = _inventoryChanged ? _inventory : null;
             _inventoryChanged = false;
+            if (_bootstrapServerMessages.Count > 0)
+            {
+                serverMessages.InsertRange(0, _bootstrapServerMessages);
+                _bootstrapServerMessages.Clear();
+            }
             return new WorldDeltaBatch(deltas, new List<NearbyEntity>(_worldEntities.Values),
                 packetsObserved, movementPacketsObserved, unmatchedMovementPackets,
-                packetKindsObserved, packetSamplesObserved, inventory);
+                packetKindsObserved, packetSamplesObserved, inventory, serverMessages,
+                zoneTransfer);
+        }
+
+        private async Task<WorldBootstrapResult> ReconnectToZoneAsync(IPAddress address,
+            int port, CancellationToken cancellationToken)
+        {
+            if (_selectedCharacter == null
+                || !int.TryParse(_selectedCharacter.Id, NumberStyles.None,
+                    CultureInfo.InvariantCulture, out int characterId))
+                throw new InvalidDataException("Cannot redirect without a selected character.");
+
+            SetState(ClientConnectionState.EnteringWorld,
+                $"Zone redirect received; reconnecting to {address}:{port}.");
+            await CloseTransportAsync().ConfigureAwait(false);
+            _client = new TcpClient();
+            _messageId = 1;
+            _sentInPlay = false;
+            using (cancellationToken.Register(() => _client?.Close()))
+            {
+                await _client.ConnectAsync(address.ToString(), port).ConfigureAwait(false);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            _stream = _client.GetStream();
+            await WritePacketAsync(AORebirthProtocol.CreateZoneLogin(
+                characterId, _zoneCookie1, _zoneCookie2), cancellationToken).ConfigureAwait(false);
+            AORebirthPacket response = await ReadPacketAsync(cancellationToken).ConfigureAwait(false);
+            if (response.PacketType != AORebirthProtocol.InitiateCompressionPacketType)
+                throw new InvalidDataException(
+                    $"Expected compression after zone redirect, received 0x{response.PacketType:X4}.");
+            await InitializeWorldCompressionAsync(cancellationToken).ConfigureAwait(false);
+            SetState(ClientConnectionState.InWorld,
+                $"Zone redirect connected at {address}:{port}; waiting for playfield bootstrap.");
+            WorldBootstrapResult bootstrap = await ReceiveWorldBootstrapAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await WritePacketAsync(AORebirthProtocol.CreateCharInPlay(characterId),
+                cancellationToken).ConfigureAwait(false);
+            _sentInPlay = true;
+            _worldEntities.Clear();
+            _worldObjects.Clear();
+            return bootstrap;
         }
 
         public InventorySnapshot GetInventorySnapshot() => _inventory;
 
         public CharacterStateSnapshot GetCharacterStateSnapshot() => _characterState;
 
+        private void CaptureSelectedAppearanceFailure(AORebirthPacket packet)
+        {
+            if (LastSelectedAppearanceDecodeFailure != null || packet?.PacketType != AORebirthProtocol.N3PacketType
+                || packet.Body.Length < 12 || _selectedCharacter == null
+                || !int.TryParse(_selectedCharacter.Id, NumberStyles.None, CultureInfo.InvariantCulture, out int selected))
+                return;
+            byte[] bytes = packet.Body;
+            int message = (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
+            int instance = (bytes[8] << 24) | (bytes[9] << 16) | (bytes[10] << 8) | bytes[11];
+            if (message == AORebirthProtocol.SimpleCharFullUpdate && instance == selected)
+                LastSelectedAppearanceDecodeFailure = BitConverter.ToString(bytes).Replace("-", string.Empty);
+        }
+
         private void CaptureCharacterState(AORebirthPacket packet)
         {
             if (AORebirthProtocol.TryReadCharacterState(packet, out CharacterStateSnapshot snapshot))
             {
                 _characterState = snapshot;
+                // FullCharacter carries the initial main page as well as worn slots.
+                var mainItems = new List<InventoryEntrySnapshot>();
+                foreach (var entry in snapshot.Slots)
+                    if (entry.Slot >= 0x40 && entry.Slot < 0x5E)
+                        mainItems.Add(entry);
+                _inventory = new InventorySnapshot(30, 50000,
+                    _selectedCharacter != null && int.TryParse(_selectedCharacter.Id, out int owner) ? owner : 0,
+                    0, mainItems);
+                _inventoryChanged = true;
                 return;
             }
 
@@ -532,13 +683,39 @@ namespace AO.Client.Backends.AORebirth
         {
             CaptureInventory(packet);
             CaptureCharacterState(packet);
+            if (_selectedCharacter != null
+                && int.TryParse(_selectedCharacter.Id, out int ownerId)
+                && AORebirthProtocol.TryApplyItemMove(packet, ownerId, _inventory, _characterState,
+                    out InventorySnapshot movedInventory, out CharacterStateSnapshot movedCharacter))
+            {
+                _inventory = movedInventory;
+                _characterState = movedCharacter;
+                _inventoryChanged = true;
+            }
             if (AORebirthProtocol.TryReadNearbyEntity(packet, _currentPlayfieldId, out NearbyEntity spawned))
             {
                 string key = EntityKey(spawned.IdentityType, spawned.IdentityInstance);
+                if (_worldEntities.TryGetValue(key, out var previous) && previous.EquipmentAppearance != null)
+                    spawned = spawned.WithEquipmentAppearance(spawned.EquipmentAppearance == null
+                        ? previous.EquipmentAppearance
+                        : spawned.EquipmentAppearance.WithHead(spawned.EquipmentAppearance.HeadMeshId ?? previous.EquipmentAppearance.HeadMeshId));
                 _worldEntities[key] = spawned;
                 ResolveLinkedObjectPositions(spawned);
                 deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Upsert,
                     spawned.IdentityType, spawned.IdentityInstance, spawned));
+                return;
+            }
+            if (AORebirthProtocol.TryReadAppearanceUpdate(packet, out int appearanceType,
+                out int appearanceId, out CharacterAppearanceSnapshot appearance))
+            {
+                string key = EntityKey(appearanceType, appearanceId);
+                if (_worldEntities.TryGetValue(key, out NearbyEntity current))
+                {
+                    var changed = current.WithEquipmentAppearance(appearance);
+                    _worldEntities[key] = changed;
+                    deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Appearance,
+                        appearanceType, appearanceId, changed));
+                }
                 return;
             }
             if (AORebirthProtocol.TryReadWorldObject(packet, _currentPlayfieldId, out WorldObject worldObject))
@@ -569,6 +746,20 @@ namespace AO.Client.Backends.AORebirth
                     unmatchedMovementPackets++;
                 }
                 return;
+            }
+            if (AORebirthProtocol.TryReadStatUpdate(packet, out AORebirthStatUpdate visualStats)
+                && (visualStats.Values.ContainsKey(64) || visualStats.Values.ContainsKey(673)))
+            {
+                string key = EntityKey(visualStats.Type, visualStats.Instance);
+                if (_worldEntities.TryGetValue(key, out NearbyEntity current) && current.EquipmentAppearance != null)
+                {
+                    var outfit = current.EquipmentAppearance;
+                    int? head = visualStats.Values.TryGetValue(64, out int newHead) ? newHead : outfit.HeadMeshId;
+                    int flags = visualStats.Values.TryGetValue(673, out int newFlags) ? newFlags : outfit.VisualFlags;
+                    var changed = current.WithEquipmentAppearance(new CharacterAppearanceSnapshot(outfit.Textures, outfit.Meshes, flags, head));
+                    _worldEntities[key] = changed;
+                    deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Appearance, visualStats.Type, visualStats.Instance, changed));
+                }
             }
             if (AORebirthProtocol.TryReadHealthStats(packet, out AORebirthHealthStats health))
             {
@@ -634,6 +825,7 @@ namespace AO.Client.Backends.AORebirth
             _characters = Array.Empty<CharacterSummary>();
             _selectedCharacter = null;
             _currentPlayfieldId = 0;
+            _bootstrapServerMessages.Clear();
             _worldEntities.Clear();
             _worldObjects.Clear();
             SetState(ClientConnectionState.Disconnected, "Disconnected.");
@@ -653,6 +845,7 @@ namespace AO.Client.Backends.AORebirth
             _characters = Array.Empty<CharacterSummary>();
             _selectedCharacter = null;
             _currentPlayfieldId = 0;
+            _bootstrapServerMessages.Clear();
             _worldEntities.Clear();
             _worldObjects.Clear();
             State = ClientConnectionState.Disconnected;
@@ -660,10 +853,21 @@ namespace AO.Client.Backends.AORebirth
 
         private async Task WritePacketAsync(byte[] packet, CancellationToken cancellationToken)
         {
-            if (_stream == null)
-                throw new InvalidOperationException("No AORebirth transport is connected.");
-            await _stream.WriteAsync(packet, 0, packet.Length, cancellationToken).ConfigureAwait(false);
-            await _stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var stream = _stream ?? throw new InvalidOperationException("No AO transport is connected.");
+                // Client traffic remains plaintext and four-byte aligned after negotiation.
+                byte[] wire = new byte[(packet.Length + 3) & ~3];
+                Buffer.BlockCopy(packet, 0, wire, 0, packet.Length);
+                wire[0] = (byte)(_messageId >> 8); wire[1] = (byte)_messageId;
+                if (++_messageId == 0xFFFF) _messageId = 1;
+                if (wire[2] == 0 && wire[3] == AORebirthProtocol.N3PacketType)
+                    wire[15] = 2;
+                await stream.WriteAsync(wire, 0, wire.Length, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally { _writeGate.Release(); }
         }
 
         private async Task<AORebirthPacket> ReadPacketAsync(CancellationToken cancellationToken)
@@ -700,7 +904,8 @@ namespace AO.Client.Backends.AORebirth
                                     | (body[2] << 8)
                                     | body[3];
             }
-            return new AORebirthPacket(packetType, systemMessageType, body);
+            return new AORebirthPacket(packetType, systemMessageType, body,
+                new BigEndianReader(header, 8).ReadInt32());
         }
 
         private async Task<byte[]> ReadExactAsync(int length, CancellationToken cancellationToken)
@@ -732,12 +937,22 @@ namespace AO.Client.Backends.AORebirth
                 while (offset < length)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    int read = ReferenceEquals(input, _worldStream)
-                        ? input.Read(buffer, offset, length - offset)
-                        : await input.ReadAsync(
-                            buffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
+                    int read;
+                    try
+                    {
+                        read = ReferenceEquals(input, _worldStream)
+                            ? input.Read(buffer, offset, length - offset)
+                            : await input.ReadAsync(
+                                buffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception exception) when (cancellationToken.IsCancellationRequested
+                        && (exception is IOException || exception is ObjectDisposedException))
+                    {
+                        throw new OperationCanceledException("AO packet read was canceled.", exception, cancellationToken);
+                    }
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (read <= 0)
-                        throw new EndOfStreamException("The AORebirth server closed the connection.");
+                        throw new EndOfStreamException("The remote AO server closed the connection.");
                     offset += read;
                 }
             }
@@ -801,6 +1016,15 @@ namespace AO.Client.Backends.AORebirth
                     {
                         AORebirthPacket packet = await ReadPacketAsync(input, CancellationToken.None)
                             .ConfigureAwait(false);
+                        if (_selectedCharacter != null && int.TryParse(_selectedCharacter.Id, out int owner))
+                        {
+                            byte[] pong = AORebirthProtocol.CreatePong(packet, owner);
+                            if (pong != null)
+                            {
+                                await WritePacketAsync(pong, CancellationToken.None).ConfigureAwait(false);
+                                continue;
+                            }
+                        }
                         packets.Write(packet);
                     }
                 }

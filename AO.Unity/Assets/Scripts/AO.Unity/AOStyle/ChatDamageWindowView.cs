@@ -10,7 +10,9 @@ namespace AO.Unity.AOStyle
     public class ChatDamageWindowView : MonoBehaviour
     {
         private static ChatDamageWindowView _activeInstance;
-        private static readonly List<string> PendingSystemLines = new List<string>();
+        private static readonly List<ChatDamageWindowView> Instances = new List<ChatDamageWindowView>();
+        private static readonly List<string> SystemHistory = new List<string>();
+        private static int _systemHistoryVersion;
         public static event Action<string> ChatCommandIssued;
         private sealed class TabState
         {
@@ -24,6 +26,7 @@ namespace AO.Unity.AOStyle
             public RectTransform LogRoot;
             public ScrollRect LogScrollRect;
             public Scrollbar LogScrollbar;
+            public InputField SelectableLog;
             public bool AutoFollow = true;
             public bool SuppressScrollEvents;
             public InputField Input;
@@ -37,27 +40,50 @@ namespace AO.Unity.AOStyle
         private RectTransform _bodyHost;
         private readonly Dictionary<string, TabState> _tabs = new Dictionary<string, TabState>(StringComparer.OrdinalIgnoreCase);
         private string _activeTabId = "Global";
+        private int _renderedSystemHistoryVersion = -1;
 
         public void Initialize(PrototypeUiContext context, Font font,
             RectTransform floatingParent)
         {
+            if (_context != null)
+                _context.StatusChanged -= HandleSystemFeed;
+            if (_activeInstance != null && _activeInstance != this
+                && _activeInstance._context != null)
+                _activeInstance._context.StatusChanged -= _activeInstance.HandleSystemFeed;
             _activeInstance = this;
+            if (!Instances.Contains(this)) Instances.Add(this);
             _context = context;
             _font = font;
             _floatingParent = floatingParent;
             Build();
             Seed();
             if (_context != null)
-                _context.StatusChanged += AppendSystemFeed;
+                _context.StatusChanged += HandleSystemFeed;
             RefreshVisuals();
         }
 
         private void OnDestroy()
         {
             if (_context != null)
-                _context.StatusChanged -= AppendSystemFeed;
+                _context.StatusChanged -= HandleSystemFeed;
             if (_activeInstance == this)
                 _activeInstance = null;
+            Instances.Remove(this);
+        }
+
+        private void LateUpdate()
+        {
+            if (_renderedSystemHistoryVersion != _systemHistoryVersion)
+                SynchronizeSystemHistory(forceFollow: false);
+            else if (_tabs.TryGetValue("System", out TabState system))
+            {
+                // Unity applies ContentSizeFitter changes after text assignment.
+                // Reconcile at the end of the frame so the outer ScrollRect sees
+                // the complete selectable log instead of the InputField's old height.
+                EnsureLogLayout(system);
+                if (system.AutoFollow)
+                    ScrollToBottom(system);
+            }
         }
 
         public static void AppendDamageFeed(string line)
@@ -72,16 +98,20 @@ namespace AO.Unity.AOStyle
         {
             if (string.IsNullOrWhiteSpace(line))
                 return;
-            if (_activeInstance == null)
+            string clean = line.Trim();
+            SystemHistory.Add(clean);
+            while (SystemHistory.Count > 200)
+                SystemHistory.RemoveAt(0);
+            _systemHistoryVersion++;
+            for (int i = Instances.Count - 1; i >= 0; i--)
             {
-                PendingSystemLines.Add(line.Trim());
-                while (PendingSystemLines.Count > 50)
-                    PendingSystemLines.RemoveAt(0);
-                return;
+                ChatDamageWindowView instance = Instances[i];
+                if (instance == null) { Instances.RemoveAt(i); continue; }
+                instance.SynchronizeSystemHistory(forceFollow: false);
             }
-            if (_activeInstance._tabs.TryGetValue("System", out var system))
-                _activeInstance.AppendLine(system, $"[System] {line.Trim()}");
         }
+
+        private void HandleSystemFeed(string line) => AppendSystemFeed(line);
 
         private void Build()
         {
@@ -152,6 +182,7 @@ namespace AO.Unity.AOStyle
             state.LogRoot = AOStyleUiFactory.CreateScrollContent(logHost);
             state.LogScrollRect = state.LogRoot.GetComponentInParent<ScrollRect>();
             ConfigureLogScrolling(state, logHost);
+            CreateSelectableLog(state);
 
             if (!isDamage && !isReadOnly)
             {
@@ -235,6 +266,7 @@ namespace AO.Unity.AOStyle
                 _activeTabId = "Global";
 
             RefreshVisuals();
+            RefreshLog(state, forceFollow: true);
         }
 
         private void Reattach(TabState state)
@@ -253,6 +285,7 @@ namespace AO.Unity.AOStyle
             state.DetachedWindow = null;
             _activeTabId = state.Id;
             RefreshVisuals();
+            RefreshLog(state, forceFollow: true);
         }
 
         private void RefreshVisuals()
@@ -288,35 +321,40 @@ namespace AO.Unity.AOStyle
                 AppendLine(damage, "[Damage] Damage feed ready.");
             if (_tabs.TryGetValue("System", out var system))
             {
-                AppendLine(system, "[System] Status feed ready.");
-                for (int i = 0; i < PendingSystemLines.Count; i++)
-                    AppendLine(system, $"[System] {PendingSystemLines[i]}");
-                PendingSystemLines.Clear();
+                SynchronizeSystemHistory(forceFollow: true);
             }
         }
 
-        private void AppendLine(TabState tab, string line)
+        private void SynchronizeSystemHistory(bool forceFollow)
+        {
+            if (!_tabs.TryGetValue("System", out TabState system)
+                || system.SelectableLog == null)
+                return;
+            system.Lines.Clear();
+            system.Lines.Add("[System] Status feed ready.");
+            for (int i = 0; i < SystemHistory.Count; i++)
+                system.Lines.Add($"[System] {SystemHistory[i]}");
+            _renderedSystemHistoryVersion = _systemHistoryVersion;
+            RefreshLog(system, forceFollow);
+        }
+
+        private void AppendLine(TabState tab, string line, bool forceFollow = false)
         {
             if (tab == null || tab.LogRoot == null)
                 return;
 
-            bool shouldFollow = tab.AutoFollow || IsNearBottom(tab);
+            bool shouldFollow = forceFollow || tab.AutoFollow || IsNearBottom(tab);
             tab.Lines.Add(line);
             while (tab.Lines.Count > 200)
                 tab.Lines.RemoveAt(0);
 
-            AOStyleUiFactoryCleanup.Clear(tab.LogRoot);
-            foreach (var entry in tab.Lines)
-            {
-                var row = AOStyleUiFactory.CreateText("Line", tab.LogRoot, entry, _font, 11, TextAnchor.UpperLeft);
-                row.horizontalOverflow = HorizontalWrapMode.Wrap;
-                row.verticalOverflow = VerticalWrapMode.Overflow;
-                row.color = tab.IsDamage
-                    ? new Color(1f, 0.82f, 0.6f, 1f)
-                    : new Color(0.85f, 0.93f, 1f, 1f);
-                var le = row.gameObject.AddComponent<LayoutElement>();
-                le.preferredHeight = 18f;
-            }
+            if (tab.SelectableLog == null)
+                CreateSelectableLog(tab);
+            UpdateSelectableLog(tab);
+            Text logText = tab.SelectableLog.textComponent;
+            var layout = tab.SelectableLog.GetComponent<LayoutElement>();
+            if (layout != null && logText != null)
+                layout.preferredHeight = Mathf.Max(18f, logText.preferredHeight + 8f);
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(tab.LogRoot);
             if (shouldFollow)
@@ -324,6 +362,75 @@ namespace AO.Unity.AOStyle
                 ScrollToBottom(tab);
                 tab.AutoFollow = true;
             }
+        }
+
+        private void RefreshLog(TabState tab, bool forceFollow)
+        {
+            if (tab?.SelectableLog == null) return;
+            UpdateSelectableLog(tab);
+            EnsureLogLayout(tab);
+            if (tab.Panel != null)
+                LayoutRebuilder.ForceRebuildLayoutImmediate(tab.Panel);
+            if (forceFollow)
+            {
+                tab.AutoFollow = true;
+                ScrollToBottom(tab);
+            }
+        }
+
+        private static void EnsureLogLayout(TabState tab)
+        {
+            if (tab?.SelectableLog == null || tab.LogRoot == null) return;
+            Text logText = tab.SelectableLog.textComponent;
+            LayoutElement layout = tab.SelectableLog.GetComponent<LayoutElement>();
+            if (layout != null && logText != null)
+            {
+                float height = Mathf.Max(18f, logText.preferredHeight + 8f);
+                layout.minHeight = height;
+                layout.preferredHeight = height;
+                ((RectTransform)tab.SelectableLog.transform).SetSizeWithCurrentAnchors(
+                    RectTransform.Axis.Vertical, height);
+            }
+            Canvas.ForceUpdateCanvases();
+            LayoutRebuilder.ForceRebuildLayoutImmediate(tab.LogRoot);
+        }
+
+        private void CreateSelectableLog(TabState tab)
+        {
+            if (tab == null || tab.LogRoot == null || tab.SelectableLog != null) return;
+            InputField field = AOStyleUiFactory.CreateInputField(
+                "SelectableLog", tab.LogRoot, string.Empty, _font, 999f);
+            field.readOnly = true;
+            field.lineType = InputField.LineType.MultiLineNewline;
+            field.navigation = Navigation.defaultNavigation;
+            Image background = field.GetComponent<Image>();
+            if (background != null) background.color = Color.clear;
+            Text text = field.textComponent;
+            if (text != null)
+            {
+                text.fontSize = 11;
+                text.alignment = TextAnchor.UpperLeft;
+                text.horizontalOverflow = HorizontalWrapMode.Wrap;
+                text.verticalOverflow = VerticalWrapMode.Overflow;
+                text.color = tab.IsDamage
+                    ? new Color(1f, 0.82f, 0.6f, 1f)
+                    : new Color(0.85f, 0.93f, 1f, 1f);
+            }
+            tab.SelectableLog = field;
+        }
+
+        private static void UpdateSelectableLog(TabState tab)
+        {
+            if (tab?.SelectableLog == null) return;
+            tab.SelectableLog.SetTextWithoutNotify(string.Join("\n", tab.Lines));
+            tab.SelectableLog.ForceLabelUpdate();
+            Text label = tab.SelectableLog.textComponent;
+            if (label == null) return;
+            // Re-enabling the Graphic invalidates the cached canvas geometry that
+            // otherwise refreshes only when the panel is undocked/reparented.
+            label.enabled = false;
+            label.enabled = true;
+            label.SetAllDirty();
         }
 
         private void ConfigureLogScrolling(TabState tab, RectTransform logHost)

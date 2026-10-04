@@ -1,0 +1,77 @@
+{
+  "Version": 1,
+  "SourcePlayfield": 127,
+  "EntranceSourceRoom": 8,
+  "EntranceSpawnX": 9000,
+  "EntranceSpawnZ": 36000,
+  "Pools": [
+    {
+      "Id": "mall",
+      "Rooms": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "Id": "depths",
+      "Rooms": [
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45
+      ]
+    }
+  ],
+  "DoorwayChecks": [
+    {
+      "FirstRoom": 16,
+      "FirstSocket": 0,
+      "SecondRoom": 11,
+      "SecondSocket": 1,
+      "ExpectedFirstY": 3899,
+      "FloorToleranceMm": 20
+    }
+  ],
+  "SourceId": "ao-subway",
+  "DisplayName": "Subway (PF 127)"
+}

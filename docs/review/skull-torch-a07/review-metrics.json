@@ -1,0 +1,15 @@
+{
+  "triangleCounts": {
+    "high": 31999,
+    "medium": 11248,
+    "low": 2632
+  },
+  "reviewStatus": "rejected",
+  "findings": [
+    "CPU projection now matches Unity screen-right (+Z front, +X side).",
+    "Whole-object silhouettes fail acceptance in all four views.",
+    "Photo atlas contains plaque and torch pixels; facial color misregisters.",
+    "Medium and low show visible facial-detail and material popping.",
+    "No tangent-space normal map or runtime frame-cost measurement."
+  ]
+}

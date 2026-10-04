@@ -2,7 +2,11 @@
     "name": "AO.Unity.Editor",
     "rootNamespace": "",
     "references": [
-        "AO.Unity"
+        "AO.Unity",
+        "WorldGen.Geometry",
+        "glTFast",
+        "WorldGen.Core",
+        "AO.Assets"
     ],
     "includePlatforms": [
         "Editor"

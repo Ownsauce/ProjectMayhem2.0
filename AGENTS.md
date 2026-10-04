@@ -1,5 +1,8 @@
 # AO Project — Core Agents & Systems
 
+Only use sub agents if the user explicitly requests them.
+When spawning subagents, use fork_turns="none" unless the parent conversation context is genuinely required.   
+
 This document provides an overview of the primary agents (classes, modules, and systems) in the **AO** project — focused on **items, equipment, stats, and modifiers** — including their responsibilities and interactions.
 
 ## 1. AODataManager

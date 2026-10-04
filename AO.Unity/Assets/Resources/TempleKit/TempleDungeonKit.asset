@@ -1,0 +1,63 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 10ca4a27ec09ab1dc91914f382ee5011, type: 3}
+  m_Name: TempleDungeonKit
+  m_EditorClassIdentifier: AO.Unity::AO.Unity.World.Procedural.TempleDungeonKit
+  entries:
+  - Id: temple-flat-plain-wall-tile-2
+    Prefab: {fileID: 8422743903140944618, guid: eeeb9285b5b7ec07eb276e9c14b2a5e7, type: 3}
+    SizeMetres: {x: 3, y: 3, z: 0.4}
+  - Id: temple-flat-wall-tile-1
+    Prefab: {fileID: 3027809999058405832, guid: 44166d13313e55b0faee57ff19ccb3c4, type: 3}
+    SizeMetres: {x: 3, y: 3, z: 0.4}
+  - Id: temple-flat-maze-wall-tile-4
+    Prefab: {fileID: 8210961032272156350, guid: b267d1c91d11f9332a52827a7944eee7, type: 3}
+    SizeMetres: {x: 3, y: 3, z: 0.4}
+  - Id: temple-flat-rough-wall-tile-3
+    Prefab: {fileID: 7875050197815728022, guid: 8bffde6ad771cbd58930ff7fa843d242, type: 3}
+    SizeMetres: {x: 3, y: 3, z: 0.4}
+  - Id: temple-pointed-wall-tile-1
+    Prefab: {fileID: 168355648355131212, guid: 4e208d4a4befc82679552855696fb4d2, type: 3}
+    SizeMetres: {x: 3, y: 3, z: 0.4}
+  - Id: temple-pillar-front
+    Prefab: {fileID: 888410008154279718, guid: 04fd5b1888fbceb0e9bea48d23c10c49, type: 3}
+    SizeMetres: {x: 3, y: 3, z: 0.4}
+  - Id: temple-altar-01
+    Prefab: {fileID: 7206327027714003562, guid: bcbc47415aff5cd4e99566b6382c1cf9, type: 3}
+    SizeMetres: {x: 2.4, y: 1.2, z: 0.9}
+  - Id: temple-beam-front-2
+    Prefab: {fileID: 330409708227079297, guid: fc6ff20b8ec17b82eba347e6d1dd45f1, type: 3}
+    SizeMetres: {x: 3, y: 3, z: 0.4}
+  - Id: temple-floor-tile-1
+    Prefab: {fileID: 4974757806683842047, guid: bbbff7d8a346d27e885e7313c730bade, type: 3}
+    SizeMetres: {x: 1.5, y: 1.5, z: 0.01}
+  - Id: temple-floor-tile-2
+    Prefab: {fileID: 1988996152657238006, guid: d90df3a16a8719df99871425d0d9d343, type: 3}
+    SizeMetres: {x: 1.5, y: 1.5, z: 0.01}
+  - Id: temple-floor-tile-3
+    Prefab: {fileID: 7254761010341851806, guid: 674925cdb1cec85999ee5967b05a31ab, type: 3}
+    SizeMetres: {x: 1.5, y: 1.5, z: 0.01}
+  - Id: temple-floor-tile-4
+    Prefab: {fileID: 3758681507879124217, guid: bc6701cfd6b0acbb59583f9b7d7f6cc6, type: 3}
+    SizeMetres: {x: 1.5, y: 1.5, z: 0.01}
+  - Id: temple-floor-tile-5
+    Prefab: {fileID: 7434893564635946329, guid: 1b2fbe223c7fa2b549fc7917486bc119, type: 3}
+    SizeMetres: {x: 1.5, y: 1.5, z: 0.01}
+  - Id: temple-floor-tile-6
+    Prefab: {fileID: 4969498377797340216, guid: 7885d6a42602c45a6b66e798e2bcb515, type: 3}
+    SizeMetres: {x: 1.5, y: 1.5, z: 0.01}
+  - Id: temple-ceiling-tile-1
+    Prefab: {fileID: 1798090587629707263, guid: c150133983fc9ead4896afd5c0ee038b, type: 3}
+    SizeMetres: {x: 1.5, y: 1.5, z: 0.01}
+  - Id: temple-ceiling-tile-2
+    Prefab: {fileID: 1109851086387734197, guid: c0496e780657c12e88cdbd1ad8d30d0a, type: 3}
+    SizeMetres: {x: 1.5, y: 1.5, z: 0.01}

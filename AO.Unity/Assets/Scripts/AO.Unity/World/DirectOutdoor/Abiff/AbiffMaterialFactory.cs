@@ -24,6 +24,14 @@ public sealed class AbiffMaterialFactory
         _database = database;
     }
 
+    public void Clear()
+    {
+        foreach (var material in _materialCache.Values) if (material != null) { if (Application.isPlaying) UnityEngine.Object.Destroy(material); else UnityEngine.Object.DestroyImmediate(material); }
+        foreach (var material in _skyMaterialCache.Values) if (material != null) { if (Application.isPlaying) UnityEngine.Object.Destroy(material); else UnityEngine.Object.DestroyImmediate(material); }
+        foreach (var texture in _textureCache.Values) if (texture != null) { if (Application.isPlaying) UnityEngine.Object.Destroy(texture); else UnityEngine.Object.DestroyImmediate(texture); }
+        _materialCache.Clear(); _skyMaterialCache.Clear(); _textureCache.Clear();
+    }
+
     public Material Get(AbiffMaterialDesc desc)
     {
         if (_materialCache.TryGetValue(desc, out Material cached))

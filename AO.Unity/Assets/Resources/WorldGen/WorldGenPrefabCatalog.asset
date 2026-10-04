@@ -1,0 +1,104 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cab751035e204ec4b24f454798d1fea8, type: 3}
+  m_Name: WorldGenPrefabCatalog
+  m_EditorClassIdentifier: WorldGen.UnityIntegration::WorldGen.UnityIntegration.WorldGenPrefabCatalog
+  contentVersion: temple-pilot-1
+  entries:
+  - Asset:
+      id: temple/architecture/doorways/basic-01
+      theme: temple
+      category: architecture
+      purpose: doorway-frame
+      path: temple/architecture/doorways/basic-01/game.glb
+      sha256: 12fd743c98f3469a5f690da135529f6c5cfe0247c47a91c11fd6804458d32036
+      pivot: bottom-center
+      notes: Measured static mesh clearance; appearance and in-game traversal still require client review.
+      dimensionsMeters:
+        x: 3.3
+        y: 3.5
+        z: 0.38
+      sourceBounds:
+        minimum:
+          x: -0.393703
+          y: 0.00007000855
+          z: -0.06829589
+        maximum:
+          x: 0.393987
+          y: 0.8979321
+          z: 0.06870413
+      clearance:
+        centerMeters:
+          x: 0
+          y: 1.4
+          z: 0
+        sizeMeters:
+          x: 2.2
+          y: 2.8
+          z: 0.78
+      collision:
+        mode: boxes
+        boxes:
+        - centerMeters:
+            x: -1.375
+            y: 1.4
+            z: 0
+          sizeMeters:
+            x: 0.55
+            y: 2.8
+            z: 0.38
+        - centerMeters:
+            x: 1.375
+            y: 1.4
+            z: 0
+          sizeMeters:
+            x: 0.55
+            y: 2.8
+            z: 0.38
+        - centerMeters:
+            x: 0
+            y: 3.15
+            z: 0
+          sizeMeters:
+            x: 3.3
+            y: 0.7
+            z: 0.38
+      sockets:
+      - id: front
+        positionMeters:
+          x: 0
+          y: 0
+          z: 0.19
+        forward:
+          x: 0
+          y: 0
+          z: 1
+        widthMeters: 2.2
+        heightMeters: 2.8
+      - id: back
+        positionMeters:
+          x: 0
+          y: 0
+          z: -0.19
+        forward:
+          x: 0
+          y: 0
+          z: -1
+        widthMeters: 2.2
+        heightMeters: 2.8
+      placement:
+        slot: doorway-frame
+        openingWidthMeters: 2.2
+        openingHeightMeters: 2.8
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 3102
+    Prefab: {fileID: 8117372231821478579, guid: 245c20623245483ed975a1532761d249, type: 3}

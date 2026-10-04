@@ -1,11 +1,13 @@
 ﻿<Solution>
   <Project Path="AO.Core.csproj" />
-  <Project Path="AO.Client.csproj" />
   <Project Path="AO.Unity.csproj" />
+  <Project Path="AO.Client.csproj" />
+  <Project Path="WorldGen.Core.csproj" />
+  <Project Path="AO.Unity.Editor.csproj" />
   <Project Path="AO.Assets.csproj" />
+  <Project Path="WorldGen.Geometry.csproj" />
   <Project Path="Assembly-CSharp-Editor.csproj" />
   <Project Path="AO.Data.Core.csproj" />
   <Project Path="AO.Data.Unity.csproj" />
-  <Project Path="AO.Unity.Editor.csproj" />
   <Project Path="Assembly-CSharp.csproj" />
 </Solution>

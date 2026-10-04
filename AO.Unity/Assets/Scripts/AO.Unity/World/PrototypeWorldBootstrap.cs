@@ -261,6 +261,7 @@ namespace AO.Unity.World
         private Transform _runtimeGlbVisualTemplateRoot;
         private readonly Queue<RuntimeGlbLoadRequest> _runtimeGlbLoadQueue = new();
         private readonly Queue<RuntimeGlbAttachRequest> _runtimeGlbAttachQueue = new();
+        private readonly List<RuntimeDynelGlbFallbackState> _runtimeDynelGlbFallbackStates = new();
         private readonly HashSet<string> _runtimeGlbPathsInFlight = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, List<GameObject>> _runtimeGlbWaitersByPath = new(StringComparer.OrdinalIgnoreCase);
         private Coroutine _runtimeGlbLoadPumpCoroutine;
@@ -2664,8 +2665,9 @@ namespace AO.Unity.World
             if (!File.Exists(streamPath))
             {
                 string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
-                string helperPath = Path.Combine(
-                    projectRoot, "tools", "AOIndoorExtractor", "AOIndoorExtractor.exe");
+                string helperPath = Path.Combine(Application.streamingAssetsPath, "Tools", "AOIndoorExtractor.exe");
+                if (!File.Exists(helperPath))
+                    helperPath = Path.Combine(projectRoot, "tools", "AOIndoorExtractor", "AOIndoorExtractor.exe");
                 if (!AOIndoorSurfaceExtractor.Extract(
                     install,
                     pf,
@@ -2700,6 +2702,7 @@ namespace AO.Unity.World
             for (int roomIndex = 0; roomIndex < extracted.Rooms.Count; roomIndex++)
             {
                 AOIndoorSurfaceRoom sourceRoom = extracted.Rooms[roomIndex];
+                if (_pendingNativeRoomRecipe != null && !_pendingNativeRoomRecipe.Rooms.Any(r => r.SourceIndex == sourceRoom.Instance)) continue;
                 string roomName = sourceRoom.Instance >= 0
                     && sourceRoom.Instance < definition.Rooms.Count
                     ? definition.Rooms[sourceRoom.Instance].Name
@@ -2712,14 +2715,16 @@ namespace AO.Unity.World
                 if (sourceRoom.Instance >= 0 && sourceRoom.Instance < definition.Rooms.Count)
                 {
                     AOIndoorSurfaceMesh terrain = AOIndoorDungeonTerrainBuilder.Build(
-                        definition.Rooms[sourceRoom.Instance], extracted.Tilemap);
+                        definition.Rooms[sourceRoom.Instance], extracted.Tilemap, normalizeRoomHeight: _pendingNativeRoomRecipe != null);
                     if (terrain != null)
                         room.SurfaceMeshes.Add(ConvertDirectIndoorMesh(terrain));
                 }
                 for (int meshIndex = 0; meshIndex < sourceRoom.Meshes.Count; meshIndex++)
                 {
                     AOIndoorSurfaceMesh sourceMesh = sourceRoom.Meshes[meshIndex];
-                    room.SurfaceMeshes.Add(ConvertDirectIndoorMesh(sourceMesh));
+                    if (_pendingNativeRoomRecipe?.Catalog.CollisionGeometryVersion == 1)
+                        sourceMesh = AOIndoorRoomCollisionClipper.Clip(sourceMesh, definition.Rooms[sourceRoom.Instance], extracted.Tilemap.TileSize);
+                    if (sourceMesh.TriangleCount > 0) room.SurfaceMeshes.Add(ConvertDirectIndoorMesh(sourceMesh));
                 }
                 surfacesFile.Rooms.Add(room);
             }
@@ -2730,10 +2735,19 @@ namespace AO.Unity.World
                 horizontalOnlyColliders: true);
             if (built)
             {
-                int navigationRooms = addIndoorRoomSurfaceColliders
+                int navigationRooms = addIndoorRoomSurfaceColliders && _pendingNativeRoomRecipe == null
                     ? BuildDirectIndoorSharpNavColliders(extracted, parent, horizontalCenter,
                         centerAroundOrigin, positionScale, definition)
                     : 0;
+                var diagnostic = parent.Find($"PF_{pf}_RoomSurfaces");
+                if (_pendingNativeRoomRecipe != null)
+                {
+                    if (centerAroundOrigin || Mathf.Abs(positionScale - 1f) > .0001f)
+                        throw new InvalidOperationException("Native room recipes require AO meter coordinates.");
+                    NativeRoomDungeonRuntime.BuildCollision(diagnostic, parent, _pendingNativeRoomRecipe);
+                }
+                NativeIndoorVisuals.BeginLoad(pf, install, definition, parent, horizontalCenter,
+                    centerAroundOrigin, positionScale, diagnostic, _pendingNativeRoomRecipe);
                 Debug.Log($"Loaded directly extracted AO indoor surfaces for PF {pf}: "
                     + $"rooms={extracted.Rooms.Count}, sharpNavRooms={navigationRooms}, source={streamPath}.");
             }
@@ -2933,6 +2947,21 @@ namespace AO.Unity.World
                             : Vector3.one;
 
                         Matrix4x4 surfaceMatrix = Matrix4x4.TRS(surfacePositionAo, surfaceRotation, surfaceScale);
+                        if (horizontalOnlyColliders)
+                        {
+                            var transformed = new List<Vector3>(surface.Vertices.Count);
+                            foreach (var vertex in surface.Vertices)
+                            {
+                                Vector3 point = surfaceMatrix.MultiplyPoint3x4(ToVector3(vertex));
+                                if (centerAroundOrigin) point -= horizontalCenter;
+                                transformed.Add(point * positionScale);
+                            }
+                            NativeIndoorSurfaceTriangles.Append(transformed, surface.Triangles,
+                                floorVertices, floorTriangles, wallVertices, wallTriangles,
+                                ceilingVertices, ceilingTriangles);
+                            builtSurfaces++;
+                            continue;
+                        }
                         IndoorSurfaceKind kind = ClassifyIndoorSurface(surfaceMatrix, surface);
                         List<Vector3> targetVertices;
                         List<int> targetTriangles;
@@ -3054,7 +3083,7 @@ namespace AO.Unity.World
 
             Debug.Log(
                 $"Loaded indoor room surfaces for playfield {pf}: builtRooms={builtRooms}/{surfacesFile.Rooms.Count}, " +
-                $"builtSurfaceMeshes={builtSurfaces}, builtPickPatches={builtPickPatches}, builtPickOutlines={builtPickOutlines}.");
+                $"builtSurfaceMeshes={builtSurfaces}, builtPickPatches={builtPickPatches}, builtPickOutlines={builtPickOutlines}, perTriangleClassification={horizontalOnlyColliders}.");
             return builtRooms > 0;
         }
 
@@ -4800,7 +4829,11 @@ namespace AO.Unity.World
             List<string> candidates = ResolveRuntimeObjectGlbCandidatePaths(objectType, resolvedMeshName);
             var state = host.GetComponent<RuntimeDynelGlbFallbackState>();
             if (state == null)
+            {
                 state = host.AddComponent<RuntimeDynelGlbFallbackState>();
+            }
+            if (!_runtimeDynelGlbFallbackStates.Contains(state))
+                _runtimeDynelGlbFallbackStates.Add(state);
             state.CandidatePaths.Clear();
             state.CandidatePaths.AddRange(candidates);
             state.NextRetryAt = Time.unscaledTime + UnityEngine.Random.Range(0.05f, Mathf.Max(0.5f, runtimeDynelGlbRetryIntervalSeconds));
@@ -6078,6 +6111,7 @@ namespace AO.Unity.World
 
             var roomGo = new GameObject($"RoomSurface_{SanitizeRoomName(room.Name)}_{room.Instance}_{suffix}");
             roomGo.transform.SetParent(parent, false);
+            roomGo.AddComponent<NativeRoomSourcePart>().Configure(room.Instance, NativeRoomPartKind.Collision);
 
             var meshFilter = roomGo.AddComponent<MeshFilter>();
             var meshRenderer = roomGo.AddComponent<MeshRenderer>();

@@ -44,8 +44,16 @@ public sealed class AoImageTextureCache
         return tex;
     }
 
+    public void Clear()
+    {
+        foreach (var texture in _aoCache.Values) if (texture != null) Object.Destroy(texture);
+        foreach (var texture in _skinCache.Values) if (texture != null) Object.Destroy(texture);
+        _aoCache.Clear(); _skinCache.Clear();
+    }
+
     static Texture2D Decode(byte[] jpgData, string name)
     {
+        if (jpgData == null || jpgData.Length == 0) return null;
         var tex = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false);
         if (jpgData != null && jpgData.Length > 0)
         {

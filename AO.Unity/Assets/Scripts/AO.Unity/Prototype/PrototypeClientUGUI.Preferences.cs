@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using AO.Client.World;
 using AO.Unity.AOStyle;
 using AO.Unity.World;
 using Newtonsoft.Json;
@@ -38,6 +39,12 @@ namespace AO.Unity.Prototype
                 if (profile == null || string.IsNullOrWhiteSpace(profile.Name))
                     continue;
 
+                NearbyEntity liveAppearance = _gameServerSession?.CurrentControlledAppearance;
+                if (liveAppearance != null
+                    && int.TryParse(profile.ServerCharacterId, out int serverCharacterId)
+                    && liveAppearance.IdentityInstance == serverCharacterId)
+                    CacheSelectedServerAppearance(profile, new[] { liveAppearance });
+
                 PersistedCharacterProfile previous = null;
                 previousByName.TryGetValue(profile.Name.Trim(), out previous);
 
@@ -59,6 +66,11 @@ namespace AO.Unity.Prototype
                     Height = (int)profile.Height,
                     Weight = (int)profile.Weight,
                     HeadMeshKey = profile.HeadMeshKey ?? string.Empty,
+                    CachedAppearanceValue = profile.CachedAppearanceValue,
+                    CachedVisualFlags = profile.CachedVisualFlags,
+                    CachedHeadMeshId = profile.CachedHeadMeshId,
+                    CachedAppearanceTextures = profile.CachedAppearanceTextures?.ToList() ?? new List<AppearanceTexture>(),
+                    CachedAppearanceMeshes = profile.CachedAppearanceMeshes?.ToList() ?? new List<AppearanceMesh>(),
                     // Keep runtime-updated playfield as source of truth; selection profile can be stale.
                     StartPlayfieldId = reusePreviousSpawnState && previous != null
                         ? (previous.StartPlayfieldId <= 0 ? 4604 : previous.StartPlayfieldId)

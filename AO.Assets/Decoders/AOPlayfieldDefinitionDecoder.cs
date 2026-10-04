@@ -30,12 +30,14 @@ namespace AO.Assets.Decoders
     public sealed class AOIndoorRoom
     {
         internal AOIndoorRoom(string name, int rotationQuarterTurns, short tileX1,
-            short tileY1, short tileX2, short tileY2, float x, float y, float z)
+            short tileY1, short tileX2, short tileY2, float x, float y, float z,
+            IReadOnlyList<AOIndoorDoorConnection> doors = null)
         {
             Name = name;
             RotationQuarterTurns = rotationQuarterTurns;
             TileX1 = tileX1; TileY1 = tileY1; TileX2 = tileX2; TileY2 = tileY2;
             X = x; Y = y; Z = z;
+            DoorConnections = doors ?? Array.Empty<AOIndoorDoorConnection>();
         }
         public string Name { get; }
         public int RotationQuarterTurns { get; }
@@ -46,8 +48,16 @@ namespace AO.Assets.Decoders
         public float X { get; }
         public float Y { get; }
         public float Z { get; }
+        public IReadOnlyList<AOIndoorDoorConnection> DoorConnections { get; }
         public float CenterX => ((((TileX2 - TileX1 - 1) & ~1) + 1) * 0.5f);
         public float CenterZ => ((((TileY2 - TileY1 - 1) & ~1) + 1) * 0.5f);
+    }
+
+    public sealed class AOIndoorDoorConnection
+    {
+        internal AOIndoorDoorConnection(short zoneLink, short posRot) { ZoneLink = zoneLink; PosRot = posRot; }
+        public short ZoneLink { get; }
+        public short PosRot { get; }
     }
 
     public static class AOPlayfieldDefinitionDecoder
@@ -109,7 +119,9 @@ namespace AO.Assets.Decoders
             if (doorCount < 0 || doorCount > 4096)
                 throw new InvalidDataException("The AO indoor-room door count is invalid.");
             EnsureRemaining(stream, doorCount * 4);
-            stream.Position += doorCount * 4;
+            var doors = new List<AOIndoorDoorConnection>(doorCount);
+            for (int door = 0; door < doorCount; door++)
+                doors.Add(new AOIndoorDoorConnection(reader.ReadInt16(), reader.ReadInt16()));
 
             string name = "Room " + roomIndex;
             if (rawRotation < 0)
@@ -146,7 +158,7 @@ namespace AO.Assets.Decoders
                 SkipElements(stream, attractorCount, bytesPerAttractor, "camera attractor");
             }
 
-            return new AOIndoorRoom(name, rawRotation & 3, x1, y1, x2, y2, x, y, z);
+            return new AOIndoorRoom(name, rawRotation & 3, x1, y1, x2, y2, x, y, z, doors);
         }
 
         private static int ReadInt32(BinaryReader reader, string label)

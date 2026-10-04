@@ -6,6 +6,63 @@ namespace AO.Unity.World
 {
     public partial class PrototypeWorldBootstrap
     {
+        private WorldGen.Dungeons.NativeRoomRecipe _pendingNativeRoomRecipe;
+
+        public bool TransitionToNativeRoomDungeon(int instanceId, WorldGen.Dungeons.NativeRoomRecipe recipe,
+            Transform character, Vector3 destination)
+        {
+            _pendingNativeRoomRecipe = recipe ?? throw new ArgumentNullException(nameof(recipe));
+            try
+            {
+                // A recipe must rebuild even when entering from the unmodified source playfield.
+                if (_activePlayfieldId == recipe.Catalog.SourcePlayfield) ClearActivePlayfield();
+                return TransitionToNativePlayfieldCopy(instanceId, recipe.Catalog.SourcePlayfield, character, destination);
+            }
+            finally { _pendingNativeRoomRecipe = null; }
+        }
+
+        public bool TransitionToNativePlayfieldCopy(int instanceId, int sourceId,
+            Transform character, Vector3 destination)
+        {
+            bool previous = placeWorldInAoCoordinates;
+            placeWorldInAoCoordinates = true;
+            try
+            {
+                bool loaded = TransitionToPlayfield(sourceId,character,destination);
+                if (loaded)
+                {
+                    _activePlayfieldId = instanceId;
+                    Debug.Log($"[WorldGen] Native copy instance={instanceId} source={sourceId} loaded.");
+                }
+                return loaded;
+            }
+            finally { placeWorldInAoCoordinates = previous; }
+        }
+
+        public bool TransitionToProceduralPlayfield(int pf, Transform characterTransform,
+            Vector3 aoDestination)
+        {
+            if (pf <= 0 || characterTransform == null)
+                return false;
+
+            BeginEnterWorldLoading();
+            ClearPendingTransitionSpawn(restorePhysics: true);
+            if (_activePlayfieldId > 0)
+                ClearActivePlayfield();
+            var root = new GameObject($"Procedural Playfield {pf}");
+            root.transform.SetParent(_worldRoot != null ? _worldRoot : transform, false);
+            _activePlayfieldRoot = root.transform;
+            _activePlayfieldId = pf;
+            _activeHorizontalCenter = Vector3.zero;
+            _activeCoordinateScale = 1f;
+            _activeUseCenteredCoordinates = false;
+            _activePlayfieldUsesIndoorRoomSurfaces = true;
+            TeleportCharacterTransform(characterTransform, aoDestination);
+            CompleteEnterWorldLoadingIfReady(characterTransform);
+            Debug.Log($"Transitioned to procedural PF {pf} at AO {aoDestination:F3}.");
+            return true;
+        }
+
         public bool TransitionToPlayfield(
             int pf,
             Transform characterTransform,

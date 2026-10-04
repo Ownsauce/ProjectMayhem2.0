@@ -142,3 +142,35 @@ secrets.json
 /Anarchy Online/
 /exports/
 /cache/
+
+# Prepared AO room catalogs and collision packages; regenerate from the local install
+# Keep source definitions, authoring settings and publication tools in Git.
+/AO.Unity/Assets/StreamingAssets/NativeCopies/
+/AO.Unity/Assets/StreamingAssets/NativeCopies.meta
+
+# Disposable editor review scenes/assets (runtime kits and imported custom assets stay tracked)
+/AO.Unity/Assets/Generated/
+/AO.Unity/Assets/Generated.meta
+
+# Reader executables rebuilt by tools/build-indoor-runtime-helpers.sh
+/AO.Unity/Assets/StreamingAssets/Tools/AOIndoorExtractor.exe
+/AO.Unity/Assets/StreamingAssets/Tools/AOIndoorExtractor.exe.meta
+/AO.Unity/Assets/StreamingAssets/Tools/AOIndoorVisualExtractor.exe
+/AO.Unity/Assets/StreamingAssets/Tools/AOIndoorVisualExtractor.exe.meta
+
+# Python/Node tooling caches and local environments
+**/__pycache__/
+*.py[cod]
+**/node_modules/
+.venv/
+venv/
+.pytest_cache/
+
+# Local AO extraction caches and temporary publication files
+AOAssetCache/
+*.aois
+.publish.lock
+.publish.lock.meta
+
+# Local command scratchpad
+/commandtest.txt

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.IO;
+using AO.Client.World;
 using AO.Unity.World;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -40,6 +41,11 @@ namespace AO.Unity.AOStyle
             public BodyWeightPreset Weight;
             public string HeadMeshKey;
             public int StartPlayfieldId;
+            public uint CachedAppearanceValue;
+            public int CachedVisualFlags;
+            public int CachedHeadMeshId;
+            public List<AppearanceTexture> CachedAppearanceTextures = new();
+            public List<AppearanceMesh> CachedAppearanceMeshes = new();
         }
 
         private sealed class PreviewDragProxy : MonoBehaviour, IBeginDragHandler, IDragHandler

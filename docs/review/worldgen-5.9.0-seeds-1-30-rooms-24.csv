@@ -1,0 +1,211 @@
+version,profile,seed,valid,error,hash,rooms,connections,shortest_boss_path,max_distance,mean_degree,dead_end_ratio,loops
+"5.9.0",Facility,1,True,"",07900074cbc02050bc7792bc8d0ca8738a47d89bd784b5fa829a9e2ad28b1936,24,23,15,16,1.917,0.333,0
+"5.9.0",Facility,2,True,"",45c6db5164d74ccd03fbaaddae38daca0e5227f25ce5e32bd2cd45802f4ff084,24,23,15,16,1.917,0.250,0
+"5.9.0",Facility,3,True,"",6e0fb59754820622e24caa091ede3ab31f42b3522ec7c97a3c597d7b0f7bcee5,24,23,15,15,1.917,0.375,0
+"5.9.0",Facility,4,True,"",c3006ef5e41e2ffdea8919aba2da05db5fd9d1c34440f8827f628b3a6efad995,24,23,15,15,1.917,0.375,0
+"5.9.0",Facility,5,True,"",be08bff8ce53c7140a873f361f87b4e86709eb8eca6191a693227cd4bcbbf557,24,23,15,16,1.917,0.292,0
+"5.9.0",Facility,6,True,"",8bd125964d45cdacf47a5a4e7913c1ef0239c955c26a4dd13773c757a150bcf2,24,23,15,15,1.917,0.375,0
+"5.9.0",Facility,7,True,"",a205df7d73c93deb8ae92ea1231fb35494ca0a99273feac0d70178ded5267cac,24,23,15,15,1.917,0.333,0
+"5.9.0",Facility,8,True,"",c928afe30581271f548c555ea8c76e857e5f57e769c179826a3144860879a34a,24,23,15,16,1.917,0.375,0
+"5.9.0",Facility,9,True,"",9abbe2a3d5803531ddbfe56e13cdb04f95ecb1983893598479d71f5ba80771ea,24,23,15,15,1.917,0.333,0
+"5.9.0",Facility,10,True,"",b1d20c6de4538838f63907a037fb491dae63e2304b58dc05371503e52f10cc61,24,23,15,17,1.917,0.250,0
+"5.9.0",Facility,11,True,"",859041618f82e610d3723903ed8bd1505f8328e40e8b47f34c7d659761800307,24,23,15,17,1.917,0.333,0
+"5.9.0",Facility,12,True,"",c2e372d6b4d01f2257cdf8822281bb8c1fe57486d3d3be4080490ef65ccf1406,24,23,15,15,1.917,0.333,0
+"5.9.0",Facility,13,True,"",e87379aea55077365dde06bd34b19f1d89a4a58bc8ac5de15190ecc11fda3566,24,23,15,15,1.917,0.417,0
+"5.9.0",Facility,14,True,"",ffec641285d4857e367b8cf29258c716623e0303bb3b56913e08dd005958681f,24,23,15,15,1.917,0.375,0
+"5.9.0",Facility,15,True,"",98b406c5a05cda96b4a84adc9f2fda0401499d24122fa3c49c224c4a592f7ae0,24,23,15,16,1.917,0.333,0
+"5.9.0",Facility,16,True,"",6653a5487edcd0976c07930b7370b2cf97bc06f337cb7dabe9c09d9459035dc4,24,23,15,15,1.917,0.375,0
+"5.9.0",Facility,17,True,"",c50368bd9ccd4dc3addceafbf14d5bb3fb846f4a8f4b135d70e47551f991dd8a,24,23,15,17,1.917,0.250,0
+"5.9.0",Facility,18,True,"",f9eebf96e3b92543fc52928d44a13ed74283c87942e761867614f5626a816917,24,23,15,15,1.917,0.375,0
+"5.9.0",Facility,19,True,"",b3785e9aed1d0935f902720ae98a5b087930ece7d86a6e23aab8e1b7798444a7,24,23,15,16,1.917,0.333,0
+"5.9.0",Facility,20,True,"",dccaf8c8c4ca0a8920e342e201b15e1722dee57d0425f12765c9db02c14271ef,24,23,15,15,1.917,0.333,0
+"5.9.0",Facility,21,True,"",444a34bc8c55f322b3a37831e0c088c28566e39783e32dd613b7f5689f733769,24,23,15,15,1.917,0.333,0
+"5.9.0",Facility,22,True,"",5316532e167fddd1b13d96d3e653a68ee444152a1e6014ef356aff61479b4c79,24,23,15,15,1.917,0.333,0
+"5.9.0",Facility,23,True,"",0ed2d4a0aa783ba227252fe6a07cc956173887d027ee2de72d50d013ead0646d,24,23,15,15,1.917,0.292,0
+"5.9.0",Facility,24,True,"",6170d7a2a9fe30cbfd39215f1034ef82e1ebb2e33f51c49e5ccff11b16362e30,24,23,15,15,1.917,0.375,0
+"5.9.0",Facility,25,True,"",4784501e9401aab2c3eb22050dc63f1097259be7191edb582add3c959c9c55a6,24,23,15,15,1.917,0.333,0
+"5.9.0",Facility,26,True,"",c8b93f5cb46c05868f0a2e0b42afef55f4c9c1e126f98303153d30c44e748c58,24,23,15,15,1.917,0.292,0
+"5.9.0",Facility,27,True,"",0fe07bf1a76917b8747743587fa2ba3e0902a8b8255e58fd03c19e64c588560c,24,23,15,15,1.917,0.375,0
+"5.9.0",Facility,28,True,"",a8e6dd4fb7e7f6613414d664fce594b0869e382e3680f07129630702f83aecc7,24,23,15,16,1.917,0.292,0
+"5.9.0",Facility,29,True,"",8639169f704ef7caefa142ae6dfa61af01051d7e7149308c8fe68c66cb6506ab,24,23,15,15,1.917,0.417,0
+"5.9.0",Facility,30,True,"",198fc63925d945305fc921cfe53acf6271ead52169ea7d19937831dd49553177,24,23,15,15,1.917,0.375,0
+"5.9.0",Subway,1,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,2,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,3,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,4,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,5,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,6,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,7,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,8,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,9,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,10,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,11,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,12,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,13,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,14,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,15,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,16,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,17,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,18,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,19,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,20,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,21,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,22,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,23,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,24,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,25,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,26,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,27,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,28,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,29,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Subway,30,false,"InvalidOperationException: No subway junction outlet cell was available.",,,,,,,,
+"5.9.0",Temple,1,True,"",1680892cbd80de3e22be528929ffb4e262fc31d0afdf977b600a44548fdd237e,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,2,True,"",475a65d06a00e1744c3b90748237f39ec93f909117b7df8cfa94276ef8866d0c,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,3,True,"",4f9499deb9d172d8b63b14ec5d4c2ccd09513b46ecb5d0b2900fba534ccac209,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,4,True,"",f0050bf97d7a8b1add7be9f408fb97c1b8868c768ceef974dfa053945e18f1b6,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,5,True,"",d803ec0622016272ee700a01f042fa622968c741110008c11a85b6922dc614bb,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,6,True,"",897edd8b9c9ae8d04b2331855cb4c67c3e9a31830f63712df2957880c0fe13a1,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,7,True,"",7dd6dd9a8f86383c605912961ae20b28612de3fca611c35a164cc4ffda4710d5,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,8,True,"",2c0534bcf2b5defb5be6aa93473a44396b8a8d73d171ba3259bb7fcf4ac41c47,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,9,True,"",1cba68738392507fe1e92865ca0d08d09a2fca426c62ced8ef9d97778cda2d41,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,10,True,"",b28c6cfcc94583204714efcad19251c18d7cbf0aa502c18fb697e0b554381af2,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,11,True,"",1f5cf1c096970e62c8900d02dc57f4513d2f0d84e226676e7c0e7dc6849a6c34,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,12,True,"",56d58a49bccfa720b231246815276c8960c00e25745d26fea1ac96cb8f24f0f3,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,13,True,"",caf7a990df6bb43fb9becf138c1edc6f2508f37d1fc8b9a151980d53bcb778db,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,14,True,"",b76362b4d929a2e20081839c701a3522ad130cd6cf3d8117b85d723035b37253,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,15,True,"",5c4ca60c75e797f6e69f48d88edd6aa775183f31d17df3e5b8a23c41c1e065c8,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,16,True,"",03d98358cd673d3c0a512cb54c83b3ab8905ce35ebf2d03d4750a143515f5bcc,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,17,True,"",e3bd7f7d6623964386017be42f4ec764cfb07f40b771f2284b3d7b7a156a2b8b,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,18,True,"",986875a94ffecfadf7507e6e54091fae282ffdb915633ca0b0f69aaf9ad726ea,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,19,True,"",75899a2dd011b79c893722589a3b7fb52d12b9903f4730d1a4def172350398db,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,20,True,"",0b94163b3846d21c4be1e028620ad83ce2868337ac38032460a434f7d719b446,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,21,True,"",e7ed42f04fd5b6542cb01461abc775a7250d11e9028e56723d5711b77d956a43,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,22,True,"",5bc60305957f4ab9bcf235aa8be5459134f6f5b25df7ee3f30c4c99c6a6df801,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,23,True,"",fd8ccd9b1a3e9da504db17b2f870fbb5cc4cf52827a92ad9cde8c6ee928dde2d,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,24,True,"",f936527b92d6b1d2d20ce144cb9a101e8cb18574f5782778ee92d552105422ba,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,25,True,"",7097383e178b68bf504ca1e412266865c6e88e9f9f842d6c683563d90104d913,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,26,True,"",cad1976fb16c276076a89e5c3736a0f628ad0428d72bd8e553e42f30f6d1e5d6,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,27,True,"",5a5059f9bd97f00942109d8002c17096f8799ebed441344e7e07cac477e771d1,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,28,True,"",7a05650eb3bf93f4325e78f05d68d73baac8226f68996d20ed873e7fed8e8d1c,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,29,True,"",23cb7e9e23a7b4734e43d365e5e319d8bc0c15a2d13d69d3006dd9ccb094feab,24,23,15,15,1.917,0.250,0
+"5.9.0",Temple,30,True,"",4ae28e9b46394ca9ca7d2c9f201bcb507bc6b94453fd7a5a780edc98252009a2,24,23,15,15,1.917,0.250,0
+"5.9.0",TempleReference,1,True,"",aaf332081de0da5374500372fba4070d06b746322e5b8cea5cb0a5d43650bdaf,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,2,True,"",d39a1f81aec18bdea80283abb3af970b64921d026c96c3c8a417048cab41424c,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,3,True,"",82d0803e22c1024b4cf2f0418a3cf9ad6d84c74a4069e82a23b09f5dcbce3921,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,4,True,"",b0260ac23d39fde7737b764172710ab6d363d72cbf543e863153d9000e7c5043,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,5,True,"",06006124873f46f92c1cfe38bb4d6ba57b67dd2a37f893f1e864a261a070fc33,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,6,True,"",d8d0be73f7a8fceb0dedc3312b9a33f20d92cc4fe66408736450f7e79d7a5779,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,7,True,"",e425c305b6a9b1e7ef9e70572ce4c2cc8e88de99f8cc021ea4b56350ff570671,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,8,True,"",193f0a46afa5a584482e36d523db5f821cd3c88913e193d90c87516af657e4e4,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,9,True,"",51d4224f4d376a2bd31b60487b4fb31e3d4d912469239f3ec064bb70e5bbe9a8,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,10,True,"",219a6b76b45293fbaf2b0ab15908ad8f12037ca005bdd7baf89aaa84bac8ddfa,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,11,True,"",c27c6ae858c953dd743f594c56f8f8f2e197e95bb1cd30058e211ee43ff5f702,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,12,True,"",2b24f88ca5d411b1a21bf04913b7504bb62addb1c24a2351ae25351cfb05d8fc,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,13,True,"",5af996b9c21ece5425765a25f076d1972231aba75fa94e738c77c5f22143090f,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,14,True,"",24a902bfd91ffcb906e98ccb2faf770273bc62d2aef69079512dbee7d7555f43,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,15,True,"",c8d89f682d90d2be14f264505345022440c0319c4cd12d498977fb380871453e,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,16,True,"",3d6f53f045c3ec4bc748e709c463d1329dc058f0afaee0ca79d62209250e4fb1,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,17,True,"",a46b8c402fb5c93784557f530ba3c14c06f227b4e5c980f326d46e8663d7a6f4,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,18,True,"",4fdb75fb038f91136c52250885bc026df344d3ddeded3d93af7e8f18da641b4c,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,19,True,"",8a090dd03e881abe64ce502d27540a2487915cc33b48e4fa1d186241a748f4e6,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,20,True,"",9efac1ef3e00c2da1edfe2cb74ef4f4b8ff0eccb3438bb8dfb75b394cf018898,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,21,True,"",08976eeb201eb401fffda6749282e29a72858465174aa89610a040c26d6c5f90,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,22,True,"",d173fb07389124029d0e651080226a2de1f952d4b2235b7733ed796defb5c7bf,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,23,True,"",236370da0eb61b4c668b1b3b00d380a925a7c7e3dac7482c3cf6e35bf4183fa1,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,24,True,"",446fb2494e8e53b261ea0703c8eebd5d2864b4bf0e21fe252f0e57f45af7c49d,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,25,True,"",11e71f2345e03a0683b57d9f502bac9a5d6ac9ef5a8e8ec4993b096ca7ad43e8,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,26,True,"",7cd1e8bd5bbe602dcaefb9fef2f12c9f69cf22e398dddb0156d23cc6dc997135,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,27,True,"",14af478782225db03a55de2b3f0127794f89c873f653afea6dd81adf50f35fc4,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,28,True,"",762cc5846b4e956cb62296e7ecd219f1a7056312411e9176f8d95c09e45a5e7e,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,29,True,"",f24c452f13cba7a88f72ca84f84be2af776e70bc469657d7bbe5bc00267e4b8b,30,32,10,12,2.133,0.100,3
+"5.9.0",TempleReference,30,True,"",bd6176a0a35aaa932716573352c1fb8bfa4472dd5a266b997b32b11002c001cd,30,32,10,12,2.133,0.100,3
+"5.9.0",Raid,1,True,"",d2ac7f5d4cab0a5a19a5762198e25bdc725b53a1fc62fb0e503a6c5c5fda2eee,24,23,15,16,1.917,0.333,0
+"5.9.0",Raid,2,True,"",80972e1f30ef56d514bef714ecbbd1815344b83a9946ade8b999b8b652496794,24,23,15,16,1.917,0.250,0
+"5.9.0",Raid,3,True,"",12cd74697bb7aecc5c83d0b4483e6eccdabb94978ef289f87ef6009ef29abe4c,24,23,15,15,1.917,0.375,0
+"5.9.0",Raid,4,True,"",83e7348750ba5ad6949ecda3477f14a4d587304514408ceaedaad1ed9db9fbf3,24,23,15,15,1.917,0.375,0
+"5.9.0",Raid,5,True,"",1af5d039c327a70f6f0f78a728c83ec57dc7e5114289f9c59d4494b464d3b64b,24,23,15,16,1.917,0.292,0
+"5.9.0",Raid,6,True,"",813325e357a856d0744bce3be427d1b1b61e81790f2724ede824be52b2f232d0,24,23,15,15,1.917,0.375,0
+"5.9.0",Raid,7,True,"",b5ccde3eabba69abd1853a4c4135e20d9d30c97ca35063bc6717430a16e35685,24,23,15,15,1.917,0.333,0
+"5.9.0",Raid,8,True,"",cdd8e1e76a215a7eb2ce310e7797ed288b912f69a9e398f4f7c08efbeb88ee7f,24,23,15,16,1.917,0.375,0
+"5.9.0",Raid,9,True,"",8bfbd403cb3bafaa4a10c89f7c15f29b8eee532dd90dd5969782e482d6e58cb4,24,23,15,15,1.917,0.333,0
+"5.9.0",Raid,10,True,"",ffaff02f101b70d1e1f03fbd3bcef5f2efce04e854ef985ff0dea5393cd24b2f,24,23,15,17,1.917,0.250,0
+"5.9.0",Raid,11,True,"",f8603e3e0bb6ab62b299c50a52e8164d2677e7dbabf9269cb3d88036dd988979,24,23,15,17,1.917,0.333,0
+"5.9.0",Raid,12,True,"",f4fe2d24a366574acc60b93b01a698269f8a29140b880eba5c9d56628145b303,24,23,15,15,1.917,0.333,0
+"5.9.0",Raid,13,True,"",0ec6c491be16f48fe9baf272250c79d7426681fcb338de5a92f372e3d6dc63c8,24,23,15,15,1.917,0.417,0
+"5.9.0",Raid,14,True,"",826d7bfb3222436615b8f6d45a27f718794a6823ffae653abdf34250c5210148,24,23,15,15,1.917,0.375,0
+"5.9.0",Raid,15,True,"",236a563db05a5a5068cfcd45282b30ed3a48e3c8b654d1b15821b5553cf3f115,24,23,15,16,1.917,0.333,0
+"5.9.0",Raid,16,True,"",94ae9ba315b1fb6f24f38e0fd024993c81f9279266cc2b3c90cbc018a2f68143,24,23,15,15,1.917,0.375,0
+"5.9.0",Raid,17,True,"",36c097966136e4a4a01290ee45ff0e78f04fead06607a98d6e3aa8f0b0de0b1e,24,23,15,17,1.917,0.250,0
+"5.9.0",Raid,18,True,"",018420fb9e4b7d3b73a90a0a0a072bd4c051741ec861f5918230c70f103b4d51,24,23,15,15,1.917,0.375,0
+"5.9.0",Raid,19,True,"",ebf8600795c107bbadfec7c40affa2e6d11aa45ec872ecad08ea5d03422907d3,24,23,15,16,1.917,0.333,0
+"5.9.0",Raid,20,True,"",b72222a54ae08716c405e7eeed70f778b42e6a21a5374424b5c235b22ba164d5,24,23,15,15,1.917,0.333,0
+"5.9.0",Raid,21,True,"",e62fb682b7165a9af9d979f5ae00935ae6e50bde15b16096b480d70594be058a,24,23,15,15,1.917,0.333,0
+"5.9.0",Raid,22,True,"",092868bfa8817a2bbc740aea189fe930b064206fbd4bf990545a668acb014535,24,23,15,15,1.917,0.333,0
+"5.9.0",Raid,23,True,"",c3ed1476c4c20b5751a877be83a8075a4ca6bb39f19e4a6e7276c2e35e0cba09,24,23,15,15,1.917,0.292,0
+"5.9.0",Raid,24,True,"",232215d5e7667da7ffb362fdd27a0d745726664775ab0f43eed3cdc94a82ff38,24,23,15,15,1.917,0.375,0
+"5.9.0",Raid,25,True,"",684a375d5708836ce69be1201a251cae29ad9d94e3407939316a51bafedbf0bc,24,23,15,15,1.917,0.333,0
+"5.9.0",Raid,26,True,"",e192bee4323571ed9c74cbceb6e8b9203e7ee2987c133b11000cc5b78978c921,24,23,15,15,1.917,0.292,0
+"5.9.0",Raid,27,True,"",c571d0415fceb3b53fe497d06d270ba5eee5005e946d67f8d480206889d0d038,24,23,15,15,1.917,0.375,0
+"5.9.0",Raid,28,True,"",7264cdee3b767e8649bbed03cc3eb2a1879bcce2a7f1a1344932e63c893c8d92,24,23,15,16,1.917,0.292,0
+"5.9.0",Raid,29,True,"",36d5e1c6d8855e9fe6fba47a12ca117244ed9a589b770cf0b1e59e12bba35318,24,23,15,15,1.917,0.417,0
+"5.9.0",Raid,30,True,"",9019ac2045ff4f756b38246e066c14c379193684f2d132308d5dc10bb48e08c7,24,23,15,15,1.917,0.375,0
+"5.9.0",GroupDungeon,1,True,"",7e14a1086fd518721dc8fef15992fec9bea1a83ecd34ae4ceae71a34bc981927,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,2,True,"",32db90453e354fcb9f02c8a99e9ac08bb17fdf371936e2881d99b092bc373d55,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,3,True,"",2797c1c4bdb8104f09fd643399b0e1acfb511dffcc48d32facb25b53196ed121,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,4,True,"",602e51b4dee39ecb27eeadb8f38781e662cec328889dbba219bb57d4b8442086,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,5,True,"",80f860c513884a6ab474feeae11f709f93f10e95304e6e9c806638387f5ce9e2,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,6,True,"",17248b8b63e1d96726325425cc44b7df9562c49d36cc2a839c3d48ed89c11727,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,7,True,"",56a75044ddb7b793ee816bf8ad5b22faaa58de03d06bc4adfcee8dc8edcd2401,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,8,True,"",3ab57a18d075a71c06bcc85c4d1727d19423c8ac89db648a9f8afe95c147319b,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,9,True,"",5fd111d1bb104a21399dc33177f48474e6cb49d45547d8f3d4662cd4a7f5dc5b,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,10,True,"",5836cad1dcf6a11792b11bf1e248dbca6945e22b6393f4fb494479f821db8701,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,11,True,"",12a24e8afa3403f8f518808bef760b9cffd9bffca67b66fa40fddc0dfa58d960,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,12,True,"",12c29182b755e9330ac39bca7a8d6dc92c82ca86367ff38c89e182bb204e3e1c,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,13,True,"",73b81cef2ec2642b257dce5a6563f307f92605bd2eb17b6f51edc11be8d0adfc,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,14,True,"",8025f7a47c5c7e24ba2ed2de4a924a71ae9f4aacc995681dba4eea4e9b4f95d2,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,15,True,"",a0aa7fd3b9219eb603fe0cbe6e0da2889574120718cfc342dc334220627f9cc4,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,16,True,"",26edc70e96225a6e7c97ada1f7eb5268deef09998ef4899afe32a8ca2bab4be0,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,17,True,"",e2ef70c0ed6dd59faa4b182693a0d960bd4b8d43cbf9649af730289cbb0f8190,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,18,True,"",c6e1cc01dc78a8341dc0daad06a4052eab9aaab975244e1d0e733e64d5f69e27,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,19,True,"",a16f4874f0f965fc6c6fe951178a2c079602c98bb8be0869b995f673c9f337ad,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,20,True,"",bc114fc7b461bfa010838ca732cdba724dcd3b625c0b1f0ce0afa5beb5917076,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,21,True,"",50417a35ad12670e824cec605b8d133e11eea1b2208cb974213cb8371100eadc,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,22,True,"",85f751983503559001f0f89b847dd311f7cd109fb6bc15e2c30972248e3a7cae,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,23,True,"",80cc09d469d39ba25dc581fc6e0cb54543990dd0171d42009c1c266000c50150,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,24,True,"",17d1c788f398d3f43c42497aac6cba1be41956e06c3f44cd86554405a3dbd0e9,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,25,True,"",dfb9f328fbadc173b4f867d33327ac97c9e9f9871220785a1feefa33293d36f2,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,26,True,"",6f18f510d5ec48d2adadd0a04afd39a7fc980f378843564dda17e434fce15b0f,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,27,True,"",d7272049ff2a90345518bf3c059eaee05123a2cd5a76f0c83ef683f3ea48d49b,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,28,True,"",eaffd6ccc3594c421f841cf3cc099e0df9abfbd1d58cc8ff231fece8e7a83a67,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,29,True,"",f5c1a10819787fc2238146a44ee69cc168e6e01bebae4470de3921fd4e13c7c1,24,23,11,13,1.917,0.250,0
+"5.9.0",GroupDungeon,30,True,"",1c3198549ecaaa03ba6e6bb97d89b48db2aca875f39f985872e9ea00af0066d7,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,1,True,"",7111382d4627d2795d233b900386698c24cbfc5ed07662c8e23744fbd6fd9dd8,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,2,True,"",6b1f221d278bc7c249805619e1fff0e3230977e7f28e121b68a83516085dc3e1,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,3,True,"",94ee22aaac957f060b00725f246ef3056a8369e8907f46f2ca9637fb7486d10e,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,4,True,"",36e9ba14c73475205788da13b5746cddf1bc02a9808f14552af1cc526a7fcdc7,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,5,True,"",9f441f6bab4fd6b9c8a8c62e6eeb3211e4c07bf6a25232203b9bbfbdd784ffca,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,6,True,"",11e543a7e7a2cde4d9e54cf331a9bf165dc4b166e51895a3e86650fe700eeb90,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,7,True,"",6a24f5a130e638c90f88e44429b2653c19e92c6da28f749a64989eb89b5b3672,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,8,True,"",286626fbf149620e02a332a424ac64a32f09b80211fab095c26f0e26dac86311,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,9,True,"",8fb4555d827723e6c445b65041cf8e207d77490c49bdc11ed45e170bbefc17a5,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,10,True,"",9809f61c80803ca227f49474def56cabee288e405b35f9f54712284dc006690a,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,11,True,"",2c147bbb0c4b68bd295f7c4fe07f8a6a4de23989634b7287ba1cca2f9455db2d,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,12,True,"",562af8af07a13f192526d97e637df5937b7d0e4c38c68f4ab5b1266b09756bc2,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,13,True,"",11a5788bf587542f9c612a0af23bba535d0450eeb7d235148f8e0fd92ddcb977,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,14,True,"",fdea3acbb07d20f9d5736c9a264a549f8598e2b4f6e2d696688021c897502bdb,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,15,True,"",36b42a01c63adab7c4069928767f1b61afb3fb6d5c37a42bc5377b96c001134a,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,16,True,"",22e637e9a6ae72c61054418a08cec89bba44a965b627625453954013adb2c0b8,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,17,True,"",6e378f6bf58766de9dd42ab4734c601430276d761e0e2e822553feab45238075,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,18,True,"",4dbc44062d32907fd4b72da622360b0167dfce71e3a52d33da68a502eb425855,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,19,True,"",3d872d10d0140eb80c759ee8608cb4acac43156b2aa54fc2c794b9a12eed7549,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,20,True,"",b76a57f617a5a921aaad2baa5659c64ed7a146c8e516a3f091f678882124d10d,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,21,True,"",71cd794fa10d79179e745a93be926285b982cf31112ce5f8b89eb1d9c2a49f14,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,22,True,"",8811c517b7ff17b38c3b2e4bfe550243cabd87cb92cfad591de5d203e613bb9c,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,23,True,"",2718d1c33fa42747e4e2e19bbe762b1a08c47d13f055334ae63a1a6b3b9dcabc,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,24,True,"",5ae8ea576155c5af2ff22e72a5a30f901664f28743059cb0432e1ac68b734fdf,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,25,True,"",736f1d48b2e8bf36c136cfdf534eb1c4f7a761a1e3ec1461d5de2bc135e6265b,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,26,True,"",c0391630a7f6271856ce9b5b603c848d680fa3172ab9c173e98238009500468e,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,27,True,"",74c062ba7b020696a3a7878d87cea404781b664aaf544f548689a55c4ee50601,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,28,True,"",8203c95117d2de1db7f0275d5c148e8796d21492fc8019c5eb431892e7009018,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,29,True,"",64f6d7c0b4a34f78739fcc1690e95f456849d5ea883fc9f75880e23d7d37d54f,24,23,11,13,1.917,0.250,0
+"5.9.0",CaveDungeon,30,True,"",a89ba1b58d9ffbef57c74bd6f89ba69d5080a3508ab5a34c54d1b5508e80a999,24,23,11,13,1.917,0.250,0

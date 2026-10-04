@@ -204,8 +204,10 @@ namespace AO.Unity.AOStyle
                 if (equipped.TryGetValue(def.SlotId, out var instanceId))
                 {
                     var dataItem = _context.GetDataItem(instanceId);
-                    if (!IsItemVisibleForTab(dataItem))
-                        goto DrawLabel;
+                    // The authoritative slot already determines which tab owns the item.
+                    // Do not hide it when an RDB item has an absent/unusual ItemClass stat.
+                    // Several live equipped items resolve their icon correctly but do not
+                    // report a class matching this prototype's local enum.
 
                     var sprite = dataItem != null ? _context.GetIconForData(dataItem) : null;
 
@@ -599,7 +601,8 @@ namespace AO.Unity.AOStyle
         }
     }
 
-    public class WearSlotPointerClick : MonoBehaviour, IPointerClickHandler
+    public class WearSlotPointerClick : MonoBehaviour, IPointerClickHandler,
+        IBeginDragHandler, IDragHandler, IEndDragHandler
     {
         public PrototypeUiContext Context;
         public int SlotId;
@@ -607,6 +610,21 @@ namespace AO.Unity.AOStyle
         public Image Icon;
         public Canvas Canvas;
         public bool IsSocial;
+
+        public void OnBeginDrag(PointerEventData eventData)
+        {
+            if (InstanceId == 0 || Canvas == null) return;
+            InventoryDragSource.ForceEndDragVisual();
+            InventoryDragSource.BeginEquippedClickPickup(
+                InstanceId, Icon != null ? Icon.sprite : null, Canvas, SlotId);
+        }
+
+        public void OnDrag(PointerEventData eventData) { }
+
+        public void OnEndDrag(PointerEventData eventData)
+        {
+            InventoryDragSource.ForceEndDragVisual();
+        }
 
         public void OnPointerClick(PointerEventData eventData)
         {

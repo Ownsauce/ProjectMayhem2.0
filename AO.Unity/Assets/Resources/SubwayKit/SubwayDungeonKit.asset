@@ -1,0 +1,1105 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fa50bb3e7048b47ff80ebdd522e23333, type: 3}
+  m_Name: SubwayDungeonKit
+  m_EditorClassIdentifier: AO.Unity::AO.Unity.World.Procedural.SubwayDungeonKit
+  entries:
+  - Role: floor
+    Prefab: {fileID: 8657466356899779433, guid: 0c7e21025171abbe19cbd8d10c9df821, type: 3}
+    Asset:
+      id: subway-floor-01
+      theme: Subway
+      category: architecture
+      purpose: Floor
+      path: Models/floor.glb
+      sha256: b42b403f73fdb4c4cdf0b111b18ddc95418502808ded738259a26016e9dc8bda
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.8605446
+        y: 0.07574427
+        z: 0.8599908
+      sourceBounds:
+        minimum:
+          x: -0.43942297
+          y: -0.00059244037
+          z: -0.43338403
+        maximum:
+          x: 0.42112166
+          y: 0.07515183
+          z: 0.42660674
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2500
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: wall
+    Prefab: {fileID: 5796270154454323373, guid: ec37d4a496674f9d5a08172dd43fc070, type: 3}
+    Asset:
+      id: subway-wall-01
+      theme: Subway
+      category: architecture
+      purpose: Wall
+      path: Models/wall.glb
+      sha256: 72960b3f7541f58d6832994680cdef4efe718ada45859b36f7ae2b034ed99aec
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 1.148531
+        y: 0.37889406
+        z: 0.108158045
+      sourceBounds:
+        minimum:
+          x: -0.559019
+          y: 0.000010997057
+          z: -0.03543999
+        maximum:
+          x: 0.58951193
+          y: 0.37890506
+          z: 0.072718054
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2500
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: ceiling
+    Prefab: {fileID: 230117151653582790, guid: a11c7c081f41a751ab7781e592c36e37, type: 3}
+    Asset:
+      id: subway-ceiling-01
+      theme: Subway
+      category: architecture
+      purpose: Ceiling
+      path: Models/ceiling.glb
+      sha256: 9e286175953f115945c83fb36c2477e27d36f9ff27ac6348750072576f7a1a21
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.91411424
+        y: 0.11533502
+        z: 0.786438
+      sourceBounds:
+        minimum:
+          x: -0.46774414
+          y: 0.00002193451
+          z: -0.38984302
+        maximum:
+          x: 0.4463701
+          y: 0.11535695
+          z: 0.39659497
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2500
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: pillar
+    Prefab: {fileID: 2578492616259855578, guid: f1c5c4f1aa46fcfd0bffea6fe3ad357d, type: 3}
+    Asset:
+      id: subway-pillar-01
+      theme: Subway
+      category: architecture
+      purpose: Pillar
+      path: Models/pillar.glb
+      sha256: 4d8aab0b15001d8577964440b2fd5d533449dd78c03ca93701f5ac7f5dbe0fd9
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.24656
+        y: 1.1526861
+        z: 0.23234686
+      sourceBounds:
+        minimum:
+          x: -0.122503
+          y: 0.00023895502
+          z: -0.11642885
+        maximum:
+          x: 0.12405701
+          y: 1.152925
+          z: 0.11591801
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2784
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: light
+    Prefab: {fileID: 1543486677787589270, guid: d55e2f681766c368a9381eb245a6c237, type: 3}
+    Asset:
+      id: subway-light-01
+      theme: Subway
+      category: architecture
+      purpose: Light
+      path: Models/light.glb
+      sha256: aedb5e713b42fc6cb5e23baddeea9d4f42cf31434f20027c3e65be404cd67c56
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 1.1820508
+        y: 0.14998442
+        z: 0.20321438
+      sourceBounds:
+        minimum:
+          x: -0.5808857
+          y: 0.00008826703
+          z: -0.103380725
+        maximum:
+          x: 0.6011651
+          y: 0.1500727
+          z: 0.09983365
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 5000
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 1
+        socketMeters:
+          x: 0
+          y: -0.2
+          z: 0
+        color:
+          x: 0.86
+          y: 0.94
+          z: 1
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: safety
+    Prefab: {fileID: 7085426873918369299, guid: 260a3a34173b83112abacf9ddcd55fe4, type: 3}
+    Asset:
+      id: subway-safety-01
+      theme: Subway
+      category: architecture
+      purpose: Safety
+      path: Models/safety.glb
+      sha256: d14e084a5197117749ef9f33404d3a40c8ef0b722326b4e790f6db42bb78546c
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 1.0914662
+        y: 0.08406734
+        z: 0.52370596
+      sourceBounds:
+        minimum:
+          x: -0.5493392
+          y: -0.0011060387
+          z: -0.26432297
+        maximum:
+          x: 0.542127
+          y: 0.0829613
+          z: 0.259383
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 4999
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: rail
+    Prefab: {fileID: 359781907282790306, guid: e6c1bb3c4ce895f0d94247f4cb133a35, type: 3}
+    Asset:
+      id: subway-rail-01
+      theme: Subway
+      category: architecture
+      purpose: Rail
+      path: Models/rail.glb
+      sha256: 35ea0ece69f820ee8181787c7e208f32ecffa6e358a0ce55b24f044eb6e7aece
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 1.168499
+        y: 0.06800201
+        z: 0.31989104
+      sourceBounds:
+        minimum:
+          x: -0.58314407
+          y: 0.00011098385
+          z: -0.16112301
+        maximum:
+          x: 0.5853549
+          y: 0.06811299
+          z: 0.15876803
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2500
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: train
+    Prefab: {fileID: 8136749141745028210, guid: 40d8703dd39d746788d9d3c8b412ce62, type: 3}
+    Asset:
+      id: subway-train-01
+      theme: Subway
+      category: architecture
+      purpose: Train
+      path: Models/train.glb
+      sha256: c3f3ab28c200b18210c1f253553c10e9205a12784d27fbadb02bf8c35c5f1183
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.220355
+        y: 0.31048194
+        z: 1.177417
+      sourceBounds:
+        minimum:
+          x: -0.112302
+          y: 0.00063303113
+          z: -0.59676206
+        maximum:
+          x: 0.108053006
+          y: 0.31111497
+          z: 0.580655
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 12498
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: stair
+    Prefab: {fileID: 5535222781020430519, guid: 3a9b2d31a000bda25ac007e893174fbd, type: 3}
+    Asset:
+      id: subway-stair-01
+      theme: Subway
+      category: architecture
+      purpose: Stair
+      path: Models/stair.glb
+      sha256: a48750a5daf5f2e2181007e2c11db54601809f288348a849feb4be3d3fc3d6da
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 1.117813
+        y: 0.21441601
+        z: 0.403578
+      sourceBounds:
+        minimum:
+          x: -0.561967
+          y: 0.00002501905
+          z: -0.218336
+        maximum:
+          x: 0.555846
+          y: 0.21444103
+          z: 0.18524201
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2498
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: handrail
+    Prefab: {fileID: 2974069043658701198, guid: 0b5a475b2b78e45c5bd64f49a746f35b, type: 3}
+    Asset:
+      id: subway-handrail-01
+      theme: Subway
+      category: architecture
+      purpose: Handrail
+      path: Models/handrail.glb
+      sha256: a133c1f5bb101ac019d8cc1c50e87a211ef24781629015aca1464e84cc17f9b1
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 1.180479
+        y: 0.22267002
+        z: 0.090504006
+      sourceBounds:
+        minimum:
+          x: -0.591711
+          y: 0.0004440099
+          z: -0.034486987
+        maximum:
+          x: 0.58876806
+          y: 0.22311403
+          z: 0.05601702
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2498
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: handrail-post
+    Prefab: {fileID: 7736291168920511765, guid: 1de9dea91c9f4d61eb12eae84d55863d, type: 3}
+    Asset:
+      id: subway-handrail-post-01
+      theme: Subway
+      category: architecture
+      purpose: HandrailPost
+      path: Models/handrail-post.glb
+      sha256: 9e0e96937f583b02d308e69df2dac5542edcc10aba9be68fc4d1fe87a835e587
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.264413
+        y: 1.1715629
+        z: 0.26392
+      sourceBounds:
+        minimum:
+          x: -0.131535
+          y: 0.00004798174
+          z: -0.13390301
+        maximum:
+          x: 0.132878
+          y: 1.1716108
+          z: 0.130017
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2498
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: wall-corner
+    Prefab: {fileID: 7764339861004191404, guid: 6281a6bf20f249a4798dab64611571ba, type: 3}
+    Asset:
+      id: subway-wall-corner-01
+      theme: Subway
+      category: architecture
+      purpose: WallCorner
+      path: Models/wall-corner.glb
+      sha256: 7325b2f7713154d428f9ca3234eaccda1a603bbe8b360683882c9e07e3573931
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.29975113
+        y: 1.1409392
+        z: 0.29832017
+      sourceBounds:
+        minimum:
+          x: -0.18887174
+          y: 0.000156641
+          z: -0.17456242
+        maximum:
+          x: 0.11087939
+          y: 1.1410959
+          z: 0.12375775
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2500
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: toilet
+    Prefab: {fileID: 5218218954502088039, guid: b79ee9bb7af3fa687b2aff2f37aa2567, type: 3}
+    Asset:
+      id: subway-toilet-01
+      theme: Subway
+      category: architecture
+      purpose: Toilet
+      path: Models/toilet.glb
+      sha256: a76aca9e8e6974c17602d0a7814f89f3b398f00200c661132c76fe01e29a5f32
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.5068157
+        y: 0.86532867
+        z: 0.8624897
+      sourceBounds:
+        minimum:
+          x: -0.26414257
+          y: 0.00016880035
+          z: -0.37374
+        maximum:
+          x: 0.2426731
+          y: 0.86549747
+          z: 0.4887497
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2500
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: sink
+    Prefab: {fileID: 3123002175590009286, guid: 11d572c6f016bf3d1af41367d0f42280, type: 3}
+    Asset:
+      id: subway-sink-01
+      theme: Subway
+      category: architecture
+      purpose: Sink
+      path: Models/sink.glb
+      sha256: 16151f915c01432d78c97caf6599170be7d76baff239b67f43e1d4e52150a5e8
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.6963736
+        y: 0.90792906
+        z: 0.7761162
+      sourceBounds:
+        minimum:
+          x: -0.34932593
+          y: -0.0009421408
+          z: -0.35275817
+        maximum:
+          x: 0.34704766
+          y: 0.90698695
+          z: 0.42335802
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2500
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: doorframe
+    Prefab: {fileID: 2269461763275662203, guid: 24224bccdf3181515926ea1c1abb1830, type: 3}
+    Asset:
+      id: subway-doorframe-01
+      theme: Subway
+      category: architecture
+      purpose: DoorFrame
+      path: Models/doorframe.glb
+      sha256: 8a34f9969c8d3eca9f952c0a946da90bf4d2bbbb7bddb5d480278b37905a13de
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.67931414
+        y: 1.0056732
+        z: 0.1142658
+      sourceBounds:
+        minimum:
+          x: -0.3424583
+          y: -0.00028795004
+          z: -0.057068467
+        maximum:
+          x: 0.33685583
+          y: 1.0053852
+          z: 0.057197332
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2498
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: door
+    Prefab: {fileID: 416559296858771317, guid: 516916f28d9c21efe872f149b5aefc3d, type: 3}
+    Asset:
+      id: subway-door-01
+      theme: Subway
+      category: architecture
+      purpose: Door
+      path: Models/door.glb
+      sha256: 33e8cea4e9dad77386a6e572811699b45e8adfa28ebc1adae16afe8a1c26e2cd
+      pivot: center
+      notes: 
+      dimensionsMeters:
+        x: 0.59484124
+        y: 1.0471542
+        z: 0.14987108
+      sourceBounds:
+        minimum:
+          x: -0.2915359
+          y: 0.0011658072
+          z: -0.07538858
+        maximum:
+          x: 0.30330533
+          y: 1.04832
+          z: 0.0744825
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: none
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 000000005a000000b40000000e010000i
+      triangles: 2500
+      tags:
+      - industrial
+      allowedThemes:
+      - Subway
+      excludedThemes: []
+      fitMode: stretch
+      approvalStatus: prototype
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  - Role: floor
+    Prefab: {fileID: 8657466356899779433, guid: 0c7e21025171abbe19cbd8d10c9df821, type: 3}
+    Asset:
+      id: 
+      theme: 
+      category: 
+      purpose: 
+      path: 
+      sha256: 
+      pivot: 
+      notes: 
+      dimensionsMeters:
+        x: 0
+        y: 0
+        z: 0
+      sourceBounds:
+        minimum:
+          x: 0
+          y: 0
+          z: 0
+        maximum:
+          x: 0
+          y: 0
+          z: 0
+      clearance:
+        centerMeters:
+          x: 0
+          y: 0
+          z: 0
+        sizeMeters:
+          x: 0
+          y: 0
+          z: 0
+      collision:
+        mode: 
+        boxes: []
+      sockets: []
+      placement:
+        slot: 
+        openingWidthMeters: 0
+        openingHeightMeters: 0
+      allowedRotations: 
+      triangles: 0
+      tags: []
+      allowedThemes: []
+      excludedThemes: []
+      fitMode: 
+      approvalStatus: 
+      lighting:
+        enabled: 0
+        socketMeters:
+          x: 0
+          y: 0
+          z: 0
+        color:
+          x: 0
+          y: 0
+          z: 0
+        intensity: 4
+        rangeMeters: 24
+        coneDegrees: 110
+        emissionIntensity: 4
+  floorSurface: {fileID: 2100000, guid: d76e9cd2fa10a2b03a1bb998021cda31, type: 2}
+  wallSurface: {fileID: 2100000, guid: 594d971ea9525250d9959ff7e8025ea3, type: 2}
+  lampEmitterMaterial: {fileID: 2100000, guid: a72f9c1bda3309a3394a277ba5ca05aa, type: 2}
+  surfaceVersion: 2

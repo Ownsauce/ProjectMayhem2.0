@@ -8,7 +8,7 @@ namespace AO.Assets.Navigation
     public static class AOIndoorDungeonTerrainBuilder
     {
         public static AOIndoorSurfaceMesh Build(AOIndoorRoom room,
-            AOIndoorDungeonTilemap tilemap)
+            AOIndoorDungeonTilemap tilemap, bool normalizeRoomHeight = false)
         {
             if (room == null) throw new ArgumentNullException(nameof(room));
             if (tilemap == null) throw new ArgumentNullException(nameof(tilemap));
@@ -23,6 +23,16 @@ namespace AO.Assets.Navigation
             float length = tilesZ * tilemap.TileSize;
             float anchorX = 1f + (room.CenterX - tilesX * 0.5f) * tilemap.TileSize;
             float anchorZ = 1f + (room.CenterZ - tilesZ * 0.5f) * tilemap.TileSize;
+            float baseline = 0f;
+            if (normalizeRoomHeight)
+            {
+                baseline = float.MaxValue;
+                for (int z = room.TileY1; z < room.TileY2; z++)
+                for (int x = room.TileX1; x < room.TileX2; x++)
+                    if ((tilemap.GetCollision(x, z) & 127) != 0)
+                        baseline = Math.Min(baseline, tilemap.GetHeight(x, z) * tilemap.HeightmapScale);
+                if (baseline == float.MaxValue) throw new InvalidOperationException("AO room has no occupied floor cells.");
+            }
             for (int z = 0; z < rows; z++)
             for (int x = 0; x < columns; x++)
             {
@@ -37,7 +47,7 @@ namespace AO.Assets.Navigation
                     out float rotatedX, out float rotatedZ);
                 vertices[offset] = room.X + rotatedX;
                 vertices[offset + 1] = room.Y
-                    + tilemap.GetHeight(mapX, mapZ) * tilemap.HeightmapScale;
+                    + tilemap.GetHeight(mapX, mapZ) * tilemap.HeightmapScale - baseline;
                 vertices[offset + 2] = room.Z + rotatedZ;
             }
 

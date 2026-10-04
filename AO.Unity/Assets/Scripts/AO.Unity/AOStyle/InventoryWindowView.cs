@@ -264,7 +264,7 @@ namespace AO.Unity.AOStyle
 
     internal static class AOStyleUiFactoryCleanup
     {
-        private static readonly HashSet<int> PendingIds = new();
+        private static readonly HashSet<EntityId> PendingIds = new();
         private static readonly List<Transform> PendingParents = new();
         private static DeferredRunner _runner;
 
@@ -284,7 +284,7 @@ namespace AO.Unity.AOStyle
 
         private static void EnqueueDeferred(Transform parent)
         {
-            int id = parent.GetInstanceID();
+            EntityId id = parent.GetEntityId();
             if (!PendingIds.Add(id))
                 return;
 

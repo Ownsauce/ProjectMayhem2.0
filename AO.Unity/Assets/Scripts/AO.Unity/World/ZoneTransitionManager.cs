@@ -64,7 +64,7 @@ namespace AO.Unity.World
 
             var root = new GameObject("_ZonePortals");
             root.transform.SetParent(parent, false);
-            var usedAnchors = new HashSet<int>();
+            var usedAnchors = new HashSet<EntityId>();
 
             int created = 0;
             for (int i = 0; i < _links.Count; i++)
@@ -81,7 +81,7 @@ namespace AO.Unity.World
                     if (candidate == null)
                         continue;
 
-                    int id = candidate.GetInstanceID();
+                    EntityId id = candidate.GetEntityId();
                     if (usedAnchors.Contains(id))
                         continue;
 

@@ -9,7 +9,7 @@ using AO.Client.World;
 
 namespace AO.Client.Backends.AORebirth
 {
-    internal static class AORebirthProtocol
+    internal static partial class AORebirthProtocol
     {
         public const int ServerSalt = 0x00000024;
         public const int LoginError = 0x0000000D;
@@ -17,6 +17,7 @@ namespace AO.Client.Backends.AORebirth
         public const int ZoneInfo = 0x00000017;
         public const int ZoneLogin = 0x0000001B;
         public const int InitiateCompressionPacketType = 0x7F00;
+        public const int TextMessagePacketType = 0x0005;
         public const int N3PacketType = 0x000A;
         public const int PlayfieldAnarchyF = 0x5F4B1A39;
         public const int SimpleCharFullUpdate = 0x271B3A6B;
@@ -30,6 +31,44 @@ namespace AO.Client.Backends.AORebirth
         public const int VendingMachineFullUpdate = 0x7F544905;
         public const int InventoryUpdate = 0x4E536976;
         public const int FullCharacter = 0x29304349;
+        public const int ChatText = 0x5F4B442A;
+        public const int ZoneRedirection = 0x0000003C;
+
+        public static bool TryReadZoneRedirection(AORebirthPacket packet,
+            out IPAddress address, out int port)
+        {
+            address = null;
+            port = 0;
+            if (packet == null || packet.SystemMessageType != ZoneRedirection
+                || packet.Body.Length < 10)
+                return false;
+            try
+            {
+                var reader = new BigEndianReader(packet.Body, 4);
+                address = new IPAddress(reader.ReadBytes(4));
+                port = reader.ReadUInt16();
+                return port > 0;
+            }
+            catch (EndOfStreamException) { address = null; port = 0; return false; }
+        }
+
+        public static bool TryReadChatText(AORebirthPacket packet, out string text)
+        {
+            text = null;
+            if (packet == null || packet.PacketType != N3PacketType || packet.Body.Length < 16)
+                return false;
+            try
+            {
+                var reader = new BigEndianReader(packet.Body);
+                if (reader.ReadInt32() != ChatText) return false;
+                reader.Skip(8); // N3 sender identity
+                reader.ReadByte(); // N3 pass-on marker
+                text = reader.ReadInt16SizedAscii("chat text", 32767);
+                return true;
+            }
+            catch (EndOfStreamException) { text = null; return false; }
+            catch (InvalidDataException) { text = null; return false; }
+        }
 
         public static bool TryReadCharacterState(AORebirthPacket packet,
             out CharacterStateSnapshot snapshot)
@@ -157,17 +196,22 @@ namespace AO.Client.Backends.AORebirth
             catch (InvalidDataException) { return false; }
         }
         private const int ScfuIsNpc = 0x00000001;
+        private const int ScfuHasExtendedTextures = 0x00000010;
         private const int ScfuHasFightingTarget = 0x00000020;
         private const int ScfuHasPlayfieldId = 0x00000040;
         private const int ScfuHasHeading = 0x00000200;
         private const int ScfuHasSmallHealth = 0x00000800;
         private const int ScfuHasExtendedLevel = 0x00001000;
         private const int ScfuHasSmallHealthDamage = 0x00004000;
+        private const int ScfuHasWaypoints = 0x00010000;
         private const int ScfuHasSmallNpcFamily = 0x00020000;
         private const int ScfuHasSmallNpcLosHeight = 0x00080000;
         private const int ScfuUnknownDataFlag = 0x02000000;
         private const int ScfuHasOrgName = 0x04000000;
+        private const int ScfuIsImmune = 0x00800000;
+        private const int ScfuUnknownFlag3 = 0x01000000;
         private const int CharacterHasVisibleName = 0x00400000;
+        private const int CharacterIsTower = 0x00020000;
         private const int UserLogin = 0x00000022;
         private const int UserCredentials = 0x00000025;
         private const int SelectCharacter = 0x00000016;
@@ -215,9 +259,111 @@ namespace AO.Client.Backends.AORebirth
                 WriteInt32(body, characterId);
                 WriteInt32(body, unchecked((int)cookie1));
                 WriteInt32(body, unchecked((int)cookie2));
-                return CreateSystemPacket(1, 1, body.ToArray());
+                // Retail 18.8.62 uses receiver 2 on the zone socket. Keep the
+                // header sender equal to the selected character in the body.
+                return CreateSystemPacket(1, 2, body.ToArray(), characterId);
             }
         }
+
+        public static byte[] CreateCharInPlay(int characterId)
+        {
+            using var body = new MemoryStream();
+            WriteInt32(body, 0x570C2039);
+            WriteInt32(body, 50000);
+            WriteInt32(body, characterId);
+            body.WriteByte(0);
+            return CreateN3Packet(characterId, body.ToArray());
+        }
+
+        public static byte[] CreatePong(AORebirthPacket ping, int characterId)
+        {
+            if (ping.PacketType != 0xB || ping.Body.Length != 24
+                || new BigEndianReader(ping.Body).ReadInt32() != 1) return null;
+            using var packet = new MemoryStream();
+            WriteUInt16(packet, 1); WriteInt16(packet, 0xB);
+            WriteInt16(packet, 1); WriteInt16(packet, 40);
+            WriteInt32(packet, characterId); WriteInt32(packet, ping.Sender);
+            WriteInt32(packet, 2); WriteInt32(packet, 0);
+            packet.Write(ping.Body, 8, 16);
+            return packet.ToArray();
+        }
+
+        internal static int ItemPlacement(ItemLocation location)
+        {
+            if (location == null) throw new ArgumentNullException(nameof(location));
+            return location.Area == ItemArea.Inventory ? 0x40 + location.Index
+                : ((int)location.Area * 0x10) + 1 + location.Index;
+        }
+
+        private static int ItemPage(int slot) => slot >= 0x40 ? 104
+            : slot >= 0x30 ? 115 : slot >= 0x20 ? 103 : slot >= 0x10 ? 102 : 101;
+
+        private static bool IsItemPlacement(int slot) => (slot >= 0x40 && slot <= 0x5d)
+            || (slot > 0 && slot < 0x40 && (slot & 15) != 0);
+
+        public static byte[] CreateItemMove(int characterId, ItemLocation source, ItemLocation destination)
+        {
+            int from = ItemPlacement(source), to = ItemPlacement(destination);
+            if (from == to) throw new ArgumentException("Source and destination are the same slot.");
+            // Captured AO unequip requests use the inventory destination marker 0x6F,
+            // not a concrete 0x40..0x5D slot. The server selects a free slot and its
+            // ContainerAddItem acknowledgement reports the resolved destination.
+            int wireTarget = source.Area != ItemArea.Inventory
+                && destination.Area == ItemArea.Inventory ? 0x6F : to;
+            using (var body = new MemoryStream())
+            {
+                WriteInt32(body, 0x5469373f); // ClientMoveItemToInventory
+                WriteInt32(body, 50000); WriteInt32(body, characterId); body.WriteByte(0);
+                WriteInt32(body, ItemPage(from)); WriteInt32(body, from); WriteInt32(body, wireTarget);
+                return CreateN3Packet(characterId, body.ToArray());
+            }
+        }
+
+        public static bool TryApplyItemMove(AORebirthPacket packet, int ownerId,
+            InventorySnapshot inventory, CharacterStateSnapshot character,
+            out InventorySnapshot updatedInventory, out CharacterStateSnapshot updatedCharacter)
+        {
+            updatedInventory = null; updatedCharacter = null;
+            if (inventory == null || character == null
+                || !TryCreateN3Reader(packet, 0x47537a24, 33, out BigEndianReader reader)) return false;
+            try
+            {
+                // ContainerAddItem confirms the actual source and destination chosen by the server.
+                var header = new BigEndianReader(packet.Body, 4);
+                if (header.ReadInt32() != 50000 || header.ReadInt32() != ownerId) return false;
+                reader.Skip(9); // sender identity and pass-on marker
+                int page = reader.ReadInt32(), from = reader.ReadInt32();
+                if (reader.ReadInt32() != 50000 || reader.ReadInt32() != ownerId) return false;
+                int to = reader.ReadInt32();
+                if (!IsItemPlacement(from) || !IsItemPlacement(to) || from == to || ItemPage(from) != page)
+                    return false;
+                var slots = new Dictionary<int, InventoryEntrySnapshot>();
+                foreach (var entry in character.Slots)
+                    if (entry != null && entry.Slot < 0x40) slots[entry.Slot] = entry;
+                foreach (var entry in inventory.Entries)
+                    if (entry != null) slots[entry.Slot >= 0x40 ? entry.Slot : entry.Slot + 0x40] = entry;
+                if (!slots.TryGetValue(from, out var moving)) return false;
+                slots.TryGetValue(to, out var displaced);
+                // Only equipment destinations swap. Inventory confirmations name an empty slot.
+                if (to >= 0x40 && displaced != null) return false;
+                slots.Remove(from);
+                slots[to] = WithSlot(moving, to);
+                if (displaced != null) slots[from] = WithSlot(displaced, from);
+                var worn = new List<InventoryEntrySnapshot>();
+                var carried = new List<InventoryEntrySnapshot>();
+                foreach (var entry in slots.Values)
+                    if (entry.Slot >= 0x40) carried.Add(entry); else worn.Add(entry);
+                updatedInventory = new InventorySnapshot(inventory.Capacity, inventory.ContainerType,
+                    inventory.ContainerInstance, inventory.MainInventorySlot, carried);
+                updatedCharacter = new CharacterStateSnapshot(worn, character.UploadedNanoIds, character.Stats);
+                return true;
+            }
+            catch (EndOfStreamException) { return false; }
+        }
+
+        private static InventoryEntrySnapshot WithSlot(InventoryEntrySnapshot item, int slot) =>
+            new InventoryEntrySnapshot(slot, item.IdentityType, item.IdentityInstance,
+                item.LowId, item.HighId, item.Quality, item.Quantity);
 
         public static byte[] CreatePlayerMovement(int characterId,
             PlayerMovementUpdate movement)
@@ -330,22 +476,28 @@ namespace AO.Client.Backends.AORebirth
                         ? reader.ReadByte() : reader.ReadUInt16();
                     npcLosHeight = (flags & ScfuHasSmallNpcLosHeight) != 0
                         ? reader.ReadByte() : reader.ReadUInt16();
-                    npcUnknown = (flags & ScfuUnknownDataFlag) != 0
-                        ? reader.ReadByte() : reader.ReadUInt16();
-                    if (reader.ReadInt16() > 0)
-                        reader.Skip(1);
+                    if ((flags & ScfuUnknownDataFlag) != 0)
+                    {
+                        npcUnknown = reader.ReadByte();
+                        reader.ReadInt16();
+                    }
                 }
                 else
                 {
                     reader.Skip(22); // Nano, team, swim, and six base abilities
+                    if ((flags & ScfuHasOrgName) != 0)
+                        reader.Skip(5); // Organization identity and rank/unknown byte.
                     if ((characterFlags & CharacterHasVisibleName) != 0)
                     {
-                        reader.ReadInt16SizedAscii("first name", 1024);
-                        reader.ReadInt16SizedAscii("last name", 1024);
+                        reader.ReadByteSizedAscii("first name", 255);
+                        reader.ReadByteSizedAscii("last name", 255);
                     }
                     if ((flags & ScfuHasOrgName) != 0)
-                        reader.ReadInt16SizedAscii("organization name", 2048);
+                        reader.ReadByteSizedAscii("organization name", 255);
                 }
+
+                if ((characterFlags & CharacterIsTower) != 0)
+                    reader.Skip(1);
 
                 int level = (flags & ScfuHasExtendedLevel) != 0 ? reader.ReadInt16() : reader.ReadByte();
                 int health = (flags & ScfuHasSmallHealth) != 0 ? reader.ReadUInt16() : reader.ReadInt32();
@@ -356,11 +508,47 @@ namespace AO.Client.Backends.AORebirth
                 int monsterScale = reader.ReadInt16();
                 int visualFlags = reader.ReadInt16();
                 int visibleTitle = reader.ReadByte();
+                CharacterAppearanceSnapshot equipmentAppearance = null;
+                if (reader.Remaining > 0)
+                {
+                    reader.Skip(reader.ReadBoundedCount("SCFU unknown data", reader.Remaining));
+                    int? head = (flags & 0x80) != 0 ? reader.ReadInt32() : (int?)null;
+                    reader.Skip((flags & 0x2000) != 0 ? 2 : 1); // Run speed
+                    if ((flags & 0x400) != 0) reader.Skip(8); // Attacker
+                    if ((flags & ScfuHasExtendedTextures) != 0)
+                        reader.Skip(checked(ReadX3F1Count(reader, "extended textures", 4096) * 44));
+                    if ((flags & ScfuIsImmune) != 0) reader.Skip(1);
+                    if ((flags & ScfuUnknownFlag3) != 0) reader.Skip(1);
+                    int nanoCount = ReadX3F1Count(reader, "active nanos", 4096);
+                    reader.Skip(checked(nanoCount * 20));
+                    if ((flags & ScfuHasWaypoints) != 0)
+                    {
+                        reader.Skip(8); // Waypoint owner identity.
+                        reader.Skip(checked(reader.ReadBoundedCount("waypoints", 4096) * 12));
+                    }
+                    ReadAppearanceArrays(reader, out var textures, out var meshes);
+                    int flags2 = reader.ReadInt32();
+                    if ((flags2 & 4) != 0) reader.Skip(4); // Owner instance; type is SimpleChar.
+                    reader.Skip(1); // SCFU trailing unknown byte.
+                    if ((flags2 & 0x40) != 0)
+                    {
+                        int attacks = reader.ReadByte();
+                        for (int index = 0; index < attacks; index++)
+                        {
+                            short marker = reader.ReadInt16();
+                            if (marker != 0) reader.Skip(14); // Four shorts, 4-byte name, final short.
+                        }
+                    }
+                    if (reader.Remaining != 0)
+                        throw new InvalidDataException($"Unexpected SCFU trailing bytes: {reader.Remaining}.");
+                    equipmentAppearance = new CharacterAppearanceSnapshot(
+                        textures, meshes, visualFlags, head);
+                }
                 NearbyEntityKind kind = isNpc ? NearbyEntityKind.Npc : NearbyEntityKind.Player;
                 entity = new NearbyEntity(identityType, identityInstance, kind, name, level,
                     health, healthDamage, playfieldId, x, y, z, appearance,
                     npcFamily, npcLosHeight, npcUnknown, monsterData, monsterScale,
-                    visualFlags, visibleTitle);
+                    visualFlags, visibleTitle, equipmentAppearance);
                 return true;
             }
             catch (EndOfStreamException) { return false; }
@@ -607,7 +795,7 @@ namespace AO.Client.Backends.AORebirth
             return characters;
         }
 
-        private static byte[] CreateSystemPacket(ushort messageId, int receiver, byte[] body)
+        private static byte[] CreateSystemPacket(ushort messageId, int receiver, byte[] body, int sender = 0)
         {
             int size = 16 + body.Length;
             int paddedSize = (size + 3) & ~3;
@@ -617,11 +805,51 @@ namespace AO.Client.Backends.AORebirth
                 WriteInt16(packet, SystemMessagePacketType);
                 WriteInt16(packet, 1);
                 WriteInt16(packet, size);
-                WriteInt32(packet, 0);
+                WriteInt32(packet, sender);
                 WriteInt32(packet, receiver);
                 packet.Write(body, 0, body.Length);
                 while (packet.Length < paddedSize)
                     packet.WriteByte(0);
+                return packet.ToArray();
+            }
+        }
+
+        public static byte[] CreateTextMessage(int sender, string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                throw new ArgumentException("Chat text is required.", nameof(text));
+            byte[] encoded = Encoding.UTF8.GetBytes(text);
+            if (encoded.Length > short.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(text), "Chat text is too long.");
+
+            using (var body = new MemoryStream())
+            {
+                WriteInt32(body, 3); // TextMessageRange.Say
+                WriteInt32(body, 0);
+                WriteInt32(body, 0);
+                WriteInt32(body, 0);
+                WriteInt16(body, encoded.Length);
+                body.Write(encoded, 0, encoded.Length);
+                body.WriteByte(0); // ChatMessageType.Say
+                return CreateFramedPacket(TextMessagePacketType, sender, 0, body.ToArray(), true);
+            }
+        }
+
+        private static byte[] CreateFramedPacket(int packetType, int sender, int receiver,
+            byte[] body, bool padToFourBytes)
+        {
+            int size = 16 + body.Length;
+            int wireSize = padToFourBytes ? (size + 3) & ~3 : size;
+            using (var packet = new MemoryStream())
+            {
+                WriteUInt16(packet, 0xDFDF);
+                WriteInt16(packet, packetType);
+                WriteInt16(packet, 1);
+                WriteInt16(packet, size);
+                WriteInt32(packet, sender);
+                WriteInt32(packet, receiver);
+                packet.Write(body, 0, body.Length);
+                while (packet.Length < wireSize) packet.WriteByte(0);
                 return packet.ToArray();
             }
         }
@@ -677,14 +905,16 @@ namespace AO.Client.Backends.AORebirth
 
     internal sealed class AORebirthPacket
     {
-        public AORebirthPacket(int packetType, int systemMessageType, byte[] body)
+        public AORebirthPacket(int packetType, int systemMessageType, byte[] body, int sender = 0)
         {
             PacketType = packetType;
+            Sender = sender;
             SystemMessageType = systemMessageType;
             Body = body ?? throw new ArgumentNullException(nameof(body));
         }
 
         public int PacketType { get; }
+        public int Sender { get; }
         public int SystemMessageType { get; }
         public byte[] Body { get; }
     }

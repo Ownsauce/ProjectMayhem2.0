@@ -1,6 +1,6 @@
 namespace AO.Client.World
 {
-    public enum WorldEntityDeltaKind { Upsert, Movement, Stats, Remove }
+    public enum WorldEntityDeltaKind { Upsert, Movement, Stats, Remove, Appearance }
 
     public sealed class WorldEntityDelta
     {

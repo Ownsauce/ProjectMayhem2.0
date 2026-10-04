@@ -143,7 +143,7 @@ namespace AO.Unity.World
         [SerializeField] private string headPreviewOffsetsFileName = "head_preview_offsets.json";
         [SerializeField] private int fallbackTextureId = 8760;
         [SerializeField] private bool overrideImportedMeshTextures = false;
-        [SerializeField] private bool flipCharacterVisualX = true;
+        [SerializeField] private bool flipCharacterVisualX = false;
         [SerializeField] private float animationBlendSpeed = 5f;
         [SerializeField] private bool playMoveStartClip = false;
         [SerializeField] private bool enableUnarmedAttackToggle = true;
@@ -259,6 +259,10 @@ namespace AO.Unity.World
         private const string PreferredAttackIdleClip = "_idle-unarmed_01_01(Clone)";
 
         private GameObject _generatedVisual;
+        public Transform BodyVisualRoot => _spawnedPrefabVisual != null ? _spawnedPrefabVisual.transform : null;
+        public bool HasServerAppearance => GetComponent<ServerAppearanceVisualController>()?.HasAppearance == true;
+        private bool HasServerBodyTextures =>
+            GetComponent<ServerAppearanceVisualController>()?.HasAuthoritativeBodyTextures == true;
         private GameObject _spawnedPrefabVisual;
         private object _runtimeVisualImporter;
         private GameObject _debugHeadVisual;
@@ -318,6 +322,7 @@ namespace AO.Unity.World
         private float _attackOneShotStartWallTime;
         private float _attackOneShotDuration;
         private CharacterController _characterController;
+        private PrototypeWalkerController _walkerController;
         private bool _wasGroundedLastFrame = true;
         private bool _jumpInAir;
         private bool _jumpLandingTransitionPlaying;
@@ -341,9 +346,9 @@ namespace AO.Unity.World
         private bool _hasLastRootPosition;
         private bool _isDestroying;
         private string _lastEquippedTextureSignature = string.Empty;
-        private int _lastEquippedTextureVisualInstanceId;
+        private EntityId _lastEquippedTextureVisualInstanceId;
         private readonly Dictionary<int, int> _lastAppliedEquippedTextureByLocation = new();
-        private readonly Dictionary<int, Material[]> _rendererMaterialCache = new();
+        private readonly Dictionary<EntityId, Material[]> _rendererMaterialCache = new();
         private AttackAnimationRulesFile _attackAnimationRules = new();
         private string _lastAttackAnimationSignature = string.Empty;
         private AttackAnimationRule _activeAttackRule;
@@ -474,6 +479,7 @@ namespace AO.Unity.World
         {
             get
             {
+                if (HasServerAppearance) return GetComponent<ServerAppearanceVisualController>().IsApplied;
                 string expected = bridge != null ? bridge.DebugHeadMeshKey ?? string.Empty : string.Empty;
                 return string.IsNullOrWhiteSpace(expected)
                     ? _debugHeadVisual == null && string.IsNullOrWhiteSpace(_debugHeadLoadInProgressKey)
@@ -649,8 +655,9 @@ namespace AO.Unity.World
             else
                 debugHeadLocalEuler = DefaultDebugHeadLocalEuler;
 
-            // Ensure mirrored exports are corrected by default during runtime.
-            flipCharacterVisualX = true;
+            // Direct CAT data is already converted into Unity coordinates. Mirroring the
+            // complete root swaps the authored right/left attachment sockets.
+            flipCharacterVisualX = false;
             // Legacy temporary weapon visual path can duplicate GLB loads and cause stalls.
             // EquippedItemVisualController is the authoritative equip visual path now.
             enableTemporaryItemVisuals = false;
@@ -1629,9 +1636,9 @@ namespace AO.Unity.World
                     if (backwardPressed)
                         desiredMoveClip = ResolveActionClipNameFromMap(availableAnimationClipNames, ActionRunBackwards, _moveLegacyClipName);
                     else if (strafeLeftPressed)
-                        desiredMoveClip = ResolveActionClipNameFromMap(availableAnimationClipNames, ActionStrafeRight, _moveLegacyClipName);
-                    else if (strafeRightPressed)
                         desiredMoveClip = ResolveActionClipNameFromMap(availableAnimationClipNames, ActionStrafeLeft, _moveLegacyClipName);
+                    else if (strafeRightPressed)
+                        desiredMoveClip = ResolveActionClipNameFromMap(availableAnimationClipNames, ActionStrafeRight, _moveLegacyClipName);
                     else if (_walkModeEnabled)
                         desiredMoveClip = ResolveActionClipNameFromMap(availableAnimationClipNames, ActionWalk, _moveLegacyClipName);
                     else
@@ -1831,6 +1838,7 @@ namespace AO.Unity.World
 
         private void RefreshEquippedBodyTextures()
         {
+            if (HasServerBodyTextures) return;
             if (!Application.isPlaying || _isDestroying)
                 return;
             if (_spawnedPrefabVisual == null || bridge?.Character?.Equipment == null || AO.Data.Unity.AODataManager.Instance == null)
@@ -1838,7 +1846,7 @@ namespace AO.Unity.World
             if (AO.Core.Characters.CharacterEquipment.GetItemInstance == null)
                 return;
 
-            int visualId = _spawnedPrefabVisual.GetInstanceID();
+            EntityId visualId = _spawnedPrefabVisual.GetEntityId();
             if (_lastEquippedTextureVisualInstanceId != visualId)
             {
                 _lastEquippedTextureVisualInstanceId = visualId;
@@ -1854,7 +1862,7 @@ namespace AO.Unity.World
 
             var resolvedByLocation = new Dictionary<int, int>();
             var signature = new StringBuilder(128);
-            signature.Append("v:").Append(visualId).Append('|');
+            signature.Append("v:").Append(visualId.ToString()).Append('|');
             foreach (var kv in equipped.OrderBy(k => k.Key))
             {
                 var instance = AO.Core.Characters.CharacterEquipment.GetItemInstance(kv.Value);
@@ -1985,7 +1993,7 @@ namespace AO.Unity.World
             if (renderer == null)
                 return Array.Empty<Material>();
 
-            int id = renderer.GetInstanceID();
+            EntityId id = renderer.GetEntityId();
             if (_rendererMaterialCache.TryGetValue(id, out var cached) && cached != null && cached.Length > 0)
                 return cached;
 
@@ -2112,7 +2120,7 @@ namespace AO.Unity.World
         private void InvalidateEquippedTextureState()
         {
             _lastEquippedTextureSignature = string.Empty;
-            _lastEquippedTextureVisualInstanceId = 0;
+            _lastEquippedTextureVisualInstanceId = EntityId.None;
             _bodyMaterialTextureSnapshot.Clear();
             _lastAppliedEquippedTextureByLocation.Clear();
             _rendererMaterialCache.Clear();
@@ -3111,7 +3119,11 @@ namespace AO.Unity.World
             if (!_attackCycleRunning)
                 StartAttackWindupPhase();
 
-            bool notGrounded = _characterController != null && !_characterController.isGrounded;
+            if (_walkerController == null) _walkerController = GetComponent<PrototypeWalkerController>();
+            bool notGrounded = _characterController != null
+                && !(_walkerController != null
+                    ? _walkerController.IsEffectivelyGrounded
+                    : _characterController.isGrounded);
             bool rangedMustStandStill = _activeAttackIsRanged && (isMoving || _jumpInAir || _jumpLandingTransitionPlaying || notGrounded);
             bool shouldPauseForMovement = rangedMustStandStill || _externalAttackCyclePaused;
             if (shouldPauseForMovement)
@@ -3980,9 +3992,9 @@ namespace AO.Unity.World
             if (backwardPressed)
                 return ActionRunBackwards;
             if (strafeLeftPressed)
-                return ActionStrafeRight;
-            if (strafeRightPressed)
                 return ActionStrafeLeft;
+            if (strafeRightPressed)
+                return ActionStrafeRight;
             if (_walkModeEnabled && forwardPressed)
                 return ActionWalk;
             return ActionRun;
@@ -4000,11 +4012,10 @@ namespace AO.Unity.World
                 return _walkModeEnabled ? "walk" : "run";
             if (backwardPressed)
                 return _walkModeEnabled ? "walk-back" : "run-back";
-            // The rendered CAT root is mirrored on X, so swap visual strafe poses.
             if (strafeLeftPressed)
-                return "walk-right";
-            if (strafeRightPressed)
                 return "walk-left";
+            if (strafeRightPressed)
+                return "walk-right";
             return "idle";
         }
 
@@ -4303,7 +4314,10 @@ namespace AO.Unity.World
                 return _jumpInAir || _jumpLandingTransitionPlaying;
             }
 
-            bool grounded = _characterController.isGrounded;
+            if (_walkerController == null) _walkerController = GetComponent<PrototypeWalkerController>();
+            bool grounded = _walkerController != null
+                ? _walkerController.IsEffectivelyGrounded
+                : _characterController.isGrounded;
             bool justTookOff = _wasGroundedLastFrame && !grounded;
             bool justLanded = !_wasGroundedLastFrame && grounded;
 
@@ -5203,6 +5217,16 @@ namespace AO.Unity.World
 
         private void RefreshDebugHeadVisual()
         {
+            if (HasServerAppearance)
+            {
+                if (_debugHeadVisual != null || !string.IsNullOrEmpty(_debugHeadLoadInProgressKey))
+                {
+                    ++_debugHeadLoadRequestId;
+                    _debugHeadLoadInProgressKey = string.Empty;
+                    ClearDebugHeadVisual();
+                }
+                return;
+            }
             string desiredKey = bridge != null ? bridge.DebugHeadMeshKey : string.Empty;
             if (string.Equals(_debugHeadMeshKey, desiredKey, StringComparison.OrdinalIgnoreCase))
                 return;
