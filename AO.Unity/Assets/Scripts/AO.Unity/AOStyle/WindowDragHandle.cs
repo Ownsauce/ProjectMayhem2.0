@@ -130,7 +130,7 @@ namespace AO.Unity.AOStyle
         }
     }
 
-    public class WindowResizeHandle : MonoBehaviour, IPointerDownHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
+    public class WindowResizeHandle : MonoBehaviour, IPointerDownHandler, IBeginDragHandler, IDragHandler, IEndDragHandler, IPointerEnterHandler, IPointerExitHandler
     {
         [System.Flags]
         public enum ResizeEdges
@@ -146,6 +146,64 @@ namespace AO.Unity.AOStyle
         public Vector2 MinSize = new Vector2(210f, 210f);
         public Vector2 MaxSize = Vector2.zero;
         public ResizeEdges Edges = ResizeEdges.Right | ResizeEdges.Bottom;
+        private bool _hovered;
+        private bool _resizing;
+        private static readonly Texture2D[] ResizeCursors = new Texture2D[4];
+
+        public void OnPointerEnter(PointerEventData eventData)
+        {
+            _hovered = true;
+            ShowResizeCursor();
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            _hovered = false;
+            if (!_resizing) Cursor.SetCursor(null, Vector2.zero, CursorMode.Auto);
+        }
+
+        private void OnDisable()
+        {
+            if (_hovered || _resizing) Cursor.SetCursor(null, Vector2.zero, CursorMode.Auto);
+            _hovered = _resizing = false;
+        }
+
+        private void ShowResizeCursor()
+        {
+            bool horizontal = (Edges & (ResizeEdges.Left | ResizeEdges.Right)) != 0;
+            bool vertical = (Edges & (ResizeEdges.Top | ResizeEdges.Bottom)) != 0;
+            int index = horizontal && vertical
+                ? (((Edges & ResizeEdges.Top) != 0) == ((Edges & ResizeEdges.Right) != 0) ? 2 : 3)
+                : (horizontal ? 0 : 1);
+            if (ResizeCursors[index] == null)
+            {
+                var direction = index == 0 ? Vector2.right : index == 1 ? Vector2.up
+                    : new Vector2(1f, index == 2 ? 1f : -1f).normalized;
+                var normal = new Vector2(-direction.y, direction.x);
+                var texture = new Texture2D(32, 32, TextureFormat.RGBA32, false);
+                texture.hideFlags = HideFlags.HideAndDontSave;
+                var pixels = new Color[32 * 32];
+                for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                {
+                    var point = new Vector2(x - 15.5f, y - 15.5f);
+                    float along = Mathf.Abs(Vector2.Dot(point, direction));
+                    float across = Mathf.Abs(Vector2.Dot(point, normal));
+                    // Double arrow with an outline that stays visible on light and dark surfaces.
+                    float shaft = Mathf.Max(across, along - 10f);
+                    float head = Mathf.Max(Mathf.Abs(across - (10f - along)) * 0.707f,
+                        Mathf.Max(5f - along, along - 10f));
+                    float distance = Mathf.Min(shaft, head);
+                    pixels[y * 32 + x] = distance < 0.8f ? Color.white
+                        : distance < 1.8f ? new Color(0.02f, 0.04f, 0.05f, 1f) : Color.clear;
+                }
+                texture.SetPixels(pixels);
+                texture.Apply();
+                ResizeCursors[index] = texture;
+            }
+            Cursor.SetCursor(ResizeCursors[index], new Vector2(16f, 16f), CursorMode.Auto);
+        }
+
         private RectTransform _parent;
         private Vector2 _startSize;
         private Vector2 _startPointerLocal;
@@ -162,6 +220,8 @@ namespace AO.Unity.AOStyle
             if (Target == null)
                 return;
 
+            _resizing = true;
+            ShowResizeCursor();
             _parent = Target.parent as RectTransform;
             _startSize = Target.sizeDelta;
             _startAnchoredPosition = Target.anchoredPosition;
@@ -231,6 +291,8 @@ namespace AO.Unity.AOStyle
 
         public void OnEndDrag(PointerEventData eventData)
         {
+            _resizing = false;
+            if (!_hovered) Cursor.SetCursor(null, Vector2.zero, CursorMode.Auto);
             if (Target == null)
                 return;
             if (_parent != null)

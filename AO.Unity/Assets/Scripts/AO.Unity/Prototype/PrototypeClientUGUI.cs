@@ -52,6 +52,8 @@ namespace AO.Unity.Prototype
         [Serializable]
         private sealed class PersistedCharacterProfile
         {
+            public string ServerCharacterId;
+            public string ServerScope;
             public string Name;
             public int Level;
             public int BreedId;
@@ -66,6 +68,7 @@ namespace AO.Unity.Prototype
             public uint CachedAppearanceValue;
             public int CachedVisualFlags;
             public int CachedHeadMeshId;
+            public int CachedMonsterScale;
             public List<AppearanceTexture> CachedAppearanceTextures = new();
             public List<AppearanceMesh> CachedAppearanceMeshes = new();
             public bool HasLastLocation;
@@ -299,7 +302,7 @@ namespace AO.Unity.Prototype
             _statsWindow.Content.gameObject.AddComponent<StatsWindowView>().Initialize(_context, font);
 
             _characterSettingsWindow = AOStyleUiFactory.CreateWindow(body, font, "Character Settings", new Vector2(1f, 1f), new Vector2(1f, 1f));
-            ConfigureWindowFrame(_characterSettingsWindow, new Vector2(560f, 228f), new Vector2(-236f, -504f), new Vector2(420f, 210f));
+            ConfigureWindowFrame(_characterSettingsWindow, new Vector2(560f, 400f), new Vector2(-236f, -504f), new Vector2(220f, 84f));
             _characterSettingsWindow.Content.gameObject.AddComponent<CharacterSettingsWindowView>().Initialize(_context, font);
 
             _teleportWindow = AOStyleUiFactory.CreateWindow(body, font, "Teleport", new Vector2(0f, 1f), new Vector2(0f, 1f));
@@ -2374,6 +2377,10 @@ namespace AO.Unity.Prototype
                 if (bridge == null || bridge.gameObject == null)
                     continue;
 
+                // Network actors already have server-driven nameplates.
+                if (bridge.ServerEntity != null)
+                    continue;
+
                 EntityId id = bridge.GetEntityId();
                 liveIds.Add(id);
                 if (!_worldNameplatesByBridgeId.TryGetValue(id, out var text) || text == null)
@@ -2585,9 +2592,12 @@ namespace AO.Unity.Prototype
             if (_context != null && target == _selfBridge)
                 return _context.GetCurrentHealthValue();
 
+            if (target?.ServerEntity != null)
+                return Mathf.Max(0, target.ServerEntity.Health - target.ServerEntity.HealthDamage);
+
             var stats = target?.Character?.StatsContainer;
             if (stats != null)
-                return Mathf.Max(1, stats.GetFinalStat(27));
+                return Mathf.Max(0, stats.GetFinalStat(27));
 
             var runtimeCombat = target != null ? target.GetComponent<RuntimeDynelCombatState>() : null;
             return runtimeCombat != null ? Mathf.Max(0, runtimeCombat.CurrentHealth) : 1;
@@ -2597,6 +2607,9 @@ namespace AO.Unity.Prototype
         {
             if (_context != null && target == _selfBridge)
                 return _context.GetMaxHealthValue();
+
+            if (target?.ServerEntity != null)
+                return Mathf.Max(1, target.ServerEntity.Health);
 
             var stats = target?.Character?.StatsContainer;
             if (stats != null)
@@ -2608,6 +2621,9 @@ namespace AO.Unity.Prototype
 
         private static int ResolveTargetLevel(CharacterRuntimeBridge target)
         {
+            if (target?.ServerEntity != null)
+                return target.ServerEntity.Level;
+
             int fromCharacter = target?.Character?.Level?.Level ?? 0;
             if (fromCharacter > 0)
                 return fromCharacter;
@@ -2751,10 +2767,10 @@ namespace AO.Unity.Prototype
             window.Root.sizeDelta = defaultSize;
             window.Root.anchoredPosition = anchoredPosition;
 
-            if (window.ResizeHandle != null)
+            foreach (var handle in window.Root.GetComponentsInChildren<WindowResizeHandle>(true))
             {
-                window.ResizeHandle.MinSize = minSize;
-                window.ResizeHandle.MaxSize = maxSize ?? Vector2.zero;
+                handle.MinSize = minSize;
+                handle.MaxSize = maxSize ?? Vector2.zero;
             }
 
             var parent = window.Root.parent as RectTransform;

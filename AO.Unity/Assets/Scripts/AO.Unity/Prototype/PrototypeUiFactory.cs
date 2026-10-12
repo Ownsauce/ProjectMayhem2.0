@@ -55,75 +55,16 @@ namespace AO.Unity.Prototype
         }
 
         public static RectTransform CreatePanel(string name, Transform parent, Color color)
-        {
-            var go = new GameObject(name, typeof(RectTransform), typeof(Image));
-            go.transform.SetParent(parent, false);
-            go.GetComponent<Image>().color = color;
-            return (RectTransform)go.transform;
-        }
+            => AO.Unity.AOStyle.AOStyleUiFactory.CreatePanel(name, parent, color);
 
         public static Text CreateText(string name, Transform parent, string value, Font font, int size, TextAnchor anchor)
-        {
-            var go = new GameObject(name, typeof(RectTransform), typeof(Text));
-            go.transform.SetParent(parent, false);
-            var t = go.GetComponent<Text>();
-            t.font = font;
-            t.text = value;
-            t.fontSize = size;
-            t.alignment = anchor;
-            t.color = Color.white;
-            t.horizontalOverflow = HorizontalWrapMode.Wrap;
-            t.verticalOverflow = VerticalWrapMode.Truncate;
-            return t;
-        }
+            => AO.Unity.AOStyle.AOStyleUiFactory.CreateText(name, parent, value, font, size, anchor);
 
         public static Button CreateButton(string name, Transform parent, string label, Font font, UnityEngine.Events.UnityAction onClick, float width = 84f)
-        {
-            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
-            go.transform.SetParent(parent, false);
-            go.GetComponent<Image>().color = new Color(0.2f, 0.25f, 0.34f, 1f);
-            var btn = go.GetComponent<Button>();
-            btn.onClick.AddListener(onClick);
-            var le = go.AddComponent<LayoutElement>();
-            le.preferredWidth = width;
-            le.preferredHeight = 26f;
-
-            var txt = CreateText("Label", go.transform, label, font, 13, TextAnchor.MiddleCenter);
-            var rt = (RectTransform)txt.transform;
-            rt.anchorMin = Vector2.zero;
-            rt.anchorMax = Vector2.one;
-            rt.offsetMin = Vector2.zero;
-            rt.offsetMax = Vector2.zero;
-            return btn;
-        }
+            => AO.Unity.AOStyle.AOStyleUiFactory.CreateButton(name, parent, label, font, onClick, width);
 
         public static InputField CreateInputField(string name, Transform parent, string placeholder, Font font)
-        {
-            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(InputField));
-            go.transform.SetParent(parent, false);
-            go.GetComponent<Image>().color = new Color(0.15f, 0.18f, 0.24f, 1f);
-            var input = go.GetComponent<InputField>();
-            go.AddComponent<LayoutElement>().preferredHeight = 26f;
-
-            var text = CreateText("Text", go.transform, "", font, 13, TextAnchor.MiddleLeft);
-            var textRt = (RectTransform)text.transform;
-            textRt.anchorMin = Vector2.zero;
-            textRt.anchorMax = Vector2.one;
-            textRt.offsetMin = new Vector2(8, 4);
-            textRt.offsetMax = new Vector2(-8, -4);
-
-            var ph = CreateText("Placeholder", go.transform, placeholder, font, 13, TextAnchor.MiddleLeft);
-            ph.color = new Color(1f, 1f, 1f, 0.45f);
-            var phRt = (RectTransform)ph.transform;
-            phRt.anchorMin = Vector2.zero;
-            phRt.anchorMax = Vector2.one;
-            phRt.offsetMin = new Vector2(8, 4);
-            phRt.offsetMax = new Vector2(-8, -4);
-
-            input.textComponent = text;
-            input.placeholder = ph;
-            return input;
-        }
+            => AO.Unity.AOStyle.AOStyleUiFactory.CreateInputField(name, parent, placeholder, font, 150f);
 
         public static RectTransform CreateScrollVertical(Transform parent, float preferredHeight = -1f)
         {

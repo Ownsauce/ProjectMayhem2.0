@@ -16,6 +16,7 @@ namespace AO.Client
         Inventory = 1 << 7,
         Combat = 1 << 8,
         Quests = 1 << 9,
-        ItemMovement = 1 << 10
+        ItemMovement = 1 << 10,
+        CharacterManagement = 1 << 11
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using System.IO;
 using AO.Client.World;
 using AO.Unity.World;
@@ -30,6 +31,8 @@ namespace AO.Unity.AOStyle
         public sealed class CharacterProfile
         {
             public string ServerCharacterId;
+            public string ServerScope;
+            public string AreaName;
             public string Name;
             public int Level;
             public int BreedId;
@@ -44,6 +47,7 @@ namespace AO.Unity.AOStyle
             public uint CachedAppearanceValue;
             public int CachedVisualFlags;
             public int CachedHeadMeshId;
+            public int CachedMonsterScale;
             public List<AppearanceTexture> CachedAppearanceTextures = new();
             public List<AppearanceMesh> CachedAppearanceMeshes = new();
         }
@@ -125,7 +129,6 @@ namespace AO.Unity.AOStyle
         private readonly List<Button> _profileButtons = new();
         private readonly List<Button> _choiceButtons = new();
         private readonly List<Button> _professionButtons = new();
-        private readonly List<Image> _carouselDots = new();
         private readonly CreationDraft _draft = new();
         private readonly List<int> _professionIds = new();
         private readonly Dictionary<int, string> _professionNames = new();
@@ -134,6 +137,11 @@ namespace AO.Unity.AOStyle
         private const float HeadEditRotationStep = 2f;
 
         private Action<CharacterProfile> _onPlay;
+        private Func<CharacterProfile, Task<CharacterProfile>> _onCreate;
+        private Func<CharacterProfile, Task> _onDelete;
+        private bool _operationPending;
+        private Button _previousCharacterButton;
+        private Button _nextCharacterButton;
         private Action _onBack;
         private Action<bool> _onCreateFlowStateChanged;
         private Action<Vector2> _onPreviewDragged;
@@ -158,6 +166,19 @@ namespace AO.Unity.AOStyle
         private ScreenState _screenState;
         private int _selectedProfileIndex = -1;
 
+        private Text _carouselPositionText;
+        private Text _capacityText;
+        private int? _characterLimit;
+        private string _serverName = string.Empty;
+        private bool HasCharacterSlot => !_characterLimit.HasValue || _profiles.Count < _characterLimit.Value;
+
+        public void SetCharacterCapacity(int? limit, string serverName)
+        {
+            _characterLimit = limit.HasValue ? Mathf.Max(0, limit.Value) : (int?)null;
+            _serverName = serverName ?? string.Empty;
+            RefreshSelectionVisuals();
+        }
+
         private Text _titleText;
         private Text _detailsText;
         private Text _statusText;
@@ -168,6 +189,7 @@ namespace AO.Unity.AOStyle
         private Button _deleteButton;
         private Button _backButton;
         private RectTransform _mainButtonRow;
+        private CanvasGroup _operationCanvasGroup;
         private RectTransform _deleteConfirmPanel;
         private InputField _deleteNameInput;
         private RawImage _previewRawImage;
@@ -209,7 +231,9 @@ namespace AO.Unity.AOStyle
             Action<int> onSelectionChanged = null,
             Action<int, string, string> onProfessionSelected = null,
             Action<bool> onProfessionStepVisibilityChanged = null,
-            Action onProfilesChanged = null)
+            Action onProfilesChanged = null,
+            Func<CharacterProfile, Task<CharacterProfile>> onCreate = null,
+            Func<CharacterProfile, Task> onDelete = null)
         {
             _font = font;
             _onPlay = onPlay;
@@ -227,6 +251,8 @@ namespace AO.Unity.AOStyle
             _onProfessionSelected = onProfessionSelected;
             _onProfessionStepVisibilityChanged = onProfessionStepVisibilityChanged;
             _onProfilesChanged = onProfilesChanged;
+            _onCreate = onCreate;
+            _onDelete = onDelete;
             _professionNames.Clear();
             _professionIds.Clear();
 
@@ -279,6 +305,8 @@ namespace AO.Unity.AOStyle
             }
         }
 
+        public int SelectedProfileIndex => _selectedProfileIndex;
+
         public IReadOnlyList<CharacterProfile> GetProfiles()
         {
             return _profiles;
@@ -292,6 +320,7 @@ namespace AO.Unity.AOStyle
         private void Build()
         {
             _root = AOStyleUiFactory.CreatePanel("CharacterSelectionRoot", transform, new Color(0.01f, 0.03f, 0.06f, 0.98f));
+            _operationCanvasGroup = _root.gameObject.AddComponent<CanvasGroup>();
             _root.anchorMin = Vector2.zero;
             _root.anchorMax = Vector2.one;
             _root.offsetMin = Vector2.zero;
@@ -312,13 +341,23 @@ namespace AO.Unity.AOStyle
             titleRt.anchorMin = new Vector2(0f, 1f);
             titleRt.anchorMax = new Vector2(0f, 1f);
             titleRt.pivot = new Vector2(0f, 1f);
-            titleRt.sizeDelta = new Vector2(1f, 1f);
-            titleRt.anchoredPosition = new Vector2(-10000f, 10000f);
-            _titleText.gameObject.SetActive(false);
+            titleRt.sizeDelta = new Vector2(620f, 44f);
+            titleRt.anchoredPosition = new Vector2(28f, -20f);
+            _titleText.fontSize = 24;
+            _titleText.fontStyle = FontStyle.Bold;
+
+            _capacityText = AOStyleUiFactory.CreateText("CharacterCapacity", frame, string.Empty, _font, 14, TextAnchor.MiddleRight);
+            var capacityRt = _capacityText.rectTransform;
+            capacityRt.anchorMin = new Vector2(0.76f, 0.15f);
+            capacityRt.anchorMax = new Vector2(0.98f, 0.22f);
+            capacityRt.offsetMin = new Vector2(8f, 0f);
+            capacityRt.offsetMax = new Vector2(-8f, 0f);
+            _capacityText.alignment = TextAnchor.MiddleCenter;
+            _capacityText.color = AOStyleUiFactory.MutedText;
 
             _infoCard = AOStyleUiFactory.CreatePanel("InfoCard", frame, new Color(0.07f, 0.10f, 0.16f, 0.55f));
             _infoCard.anchorMin = new Vector2(0.02f, 0.50f);
-            _infoCard.anchorMax = new Vector2(0.19f, 0.93f);
+            _infoCard.anchorMax = new Vector2(0.19f, 0.90f);
             _infoCard.offsetMin = Vector2.zero;
             _infoCard.offsetMax = Vector2.zero;
             var infoOutline = _infoCard.gameObject.AddComponent<Outline>();
@@ -338,7 +377,7 @@ namespace AO.Unity.AOStyle
             _content = AOStyleUiFactory.CreatePanel("Content", frame, new Color(0f, 0f, 0f, 0f));
             // Keep center/right stage so the left info/list panel remains visible.
             _content.anchorMin = new Vector2(0.20f, 0.02f);
-            _content.anchorMax = new Vector2(0.99f, 0.98f);
+            _content.anchorMax = new Vector2(0.74f, 0.90f);
             _content.offsetMin = Vector2.zero;
             _content.offsetMax = Vector2.zero;
             var contentOutline = _content.gameObject.AddComponent<Outline>();
@@ -346,22 +385,25 @@ namespace AO.Unity.AOStyle
             contentOutline.effectDistance = new Vector2(1f, -1f);
 
             _sidePanel = AOStyleUiFactory.CreatePanel("CharacterQuickList", frame, new Color(0.07f, 0.10f, 0.16f, 0.48f));
-            _sidePanel.anchorMin = new Vector2(0.02f, 0.16f);
-            _sidePanel.anchorMax = new Vector2(0.19f, 0.49f);
+            _sidePanel.anchorMin = new Vector2(0.76f, 0.23f);
+            _sidePanel.anchorMax = new Vector2(0.98f, 0.90f);
             _sidePanel.offsetMin = Vector2.zero;
             _sidePanel.offsetMax = Vector2.zero;
-            var sideTitle = AOStyleUiFactory.CreateText("QuickListTitle", _sidePanel, "Characters", _font, 16, TextAnchor.MiddleLeft);
+            var sideTitle = AOStyleUiFactory.CreateText("QuickListTitle", _sidePanel, "Character List", _font, 13, TextAnchor.MiddleLeft);
+            sideTitle.color = AOStyleUiFactory.MutedText;
             var sideTitleRt = (RectTransform)sideTitle.transform;
             sideTitleRt.anchorMin = new Vector2(0f, 1f);
             sideTitleRt.anchorMax = new Vector2(1f, 1f);
             sideTitleRt.offsetMin = new Vector2(10f, -34f);
             sideTitleRt.offsetMax = new Vector2(-10f, -8f);
 
-            _sideListContent = AOStyleUiFactory.CreatePanel("QuickListContent", _sidePanel, new Color(0f, 0f, 0f, 0f));
-            _sideListContent.anchorMin = new Vector2(0f, 0f);
-            _sideListContent.anchorMax = new Vector2(1f, 1f);
-            _sideListContent.offsetMin = new Vector2(8f, 8f);
-            _sideListContent.offsetMax = new Vector2(-8f, -40f);
+            var rosterHost = AOStyleUiFactory.CreatePanel("RosterHost", _sidePanel, Color.clear);
+            rosterHost.anchorMin = Vector2.zero;
+            rosterHost.anchorMax = Vector2.one;
+            rosterHost.offsetMin = new Vector2(8f, 8f);
+            rosterHost.offsetMax = new Vector2(-8f, -40f);
+            _sideListContent = AOStyleUiFactory.CreateScrollContent(rosterHost);
+            _sideListContent.GetComponentInParent<ScrollRect>().scrollSensitivity = 28f;
 
             _stepContent = AOStyleUiFactory.CreatePanel("StepContent", frame, new Color(0.05f, 0.08f, 0.13f, 0.92f));
             _stepContent.anchorMin = new Vector2(0.02f, 0.16f);
@@ -387,30 +429,31 @@ namespace AO.Unity.AOStyle
 
             var leftRow = AOStyleUiFactory.CreatePanel("ButtonRowLeft", _mainButtonRow, new Color(0f, 0f, 0f, 0f));
             leftRow.anchorMin = new Vector2(0f, 0f);
-            leftRow.anchorMax = new Vector2(0.5f, 1f);
+            leftRow.anchorMax = new Vector2(0.74f, 1f);
             leftRow.offsetMin = Vector2.zero;
             leftRow.offsetMax = Vector2.zero;
             var leftLayout = leftRow.gameObject.AddComponent<HorizontalLayoutGroup>();
             leftLayout.spacing = 8f;
-            leftLayout.childControlWidth = false;
+            leftLayout.childControlWidth = true;
             leftLayout.childForceExpandWidth = false;
             leftLayout.childAlignment = TextAnchor.MiddleLeft;
 
             var rightRow = AOStyleUiFactory.CreatePanel("ButtonRowRight", _mainButtonRow, new Color(0f, 0f, 0f, 0f));
-            rightRow.anchorMin = new Vector2(0.5f, 0f);
+            rightRow.anchorMin = new Vector2(0.76f, 0f);
             rightRow.anchorMax = new Vector2(1f, 1f);
             rightRow.offsetMin = Vector2.zero;
             rightRow.offsetMax = Vector2.zero;
             var rightLayout = rightRow.gameObject.AddComponent<HorizontalLayoutGroup>();
             rightLayout.spacing = 8f;
-            rightLayout.childControlWidth = false;
+            rightLayout.childControlWidth = true;
             rightLayout.childForceExpandWidth = false;
-            rightLayout.childAlignment = TextAnchor.MiddleRight;
+            rightLayout.childAlignment = TextAnchor.MiddleCenter;
+            rightLayout.childForceExpandWidth = true;
 
             _backButton = AOStyleUiFactory.CreateButton("Back", leftRow, "Back", _font, () => _onBack?.Invoke(), 110f);
             _editAppearanceButton = AOStyleUiFactory.CreateButton("EditAppearance", leftRow, "Edit Appearance", _font, StartEditAppearance, 150f);
-            _createButton = AOStyleUiFactory.CreateButton("Create", rightRow, "Create Character", _font, StartCreateFlow, 170f);
-            _deleteButton = AOStyleUiFactory.CreateButton("Delete", rightRow, "Delete Character", _font, ShowDeleteConfirm, 170f);
+            _createButton = AOStyleUiFactory.CreateButton("Create", leftRow, "Create Character", _font, StartCreateFlow, 170f);
+            _deleteButton = AOStyleUiFactory.CreateButton("Delete", leftRow, "Delete Character", _font, ShowDeleteConfirm, 170f);
             _playButton = AOStyleUiFactory.CreateButton("Play", rightRow, "Play", _font, OnPlayClicked, 110f);
             StyleActionButton(_backButton, false);
             StyleActionButton(_editAppearanceButton, false);
@@ -424,6 +467,7 @@ namespace AO.Unity.AOStyle
         private void ShowSelectionScreen()
         {
             _screenState = ScreenState.Select;
+            if (_capacityText != null) _capacityText.gameObject.SetActive(true);
             _titleText.text = "Character Selection";
             _statusText.text = string.Empty;
             _statusText.gameObject.SetActive(true);
@@ -475,9 +519,9 @@ namespace AO.Unity.AOStyle
             stageBg.offsetMax = Vector2.zero;
             stageBg.SetAsFirstSibling();
 
-            _centerNameplateText = AOStyleUiFactory.CreateText("CenterNameplate", stage, string.Empty, _font, 36, TextAnchor.MiddleCenter);
+            _centerNameplateText = AOStyleUiFactory.CreateText("CenterNameplate", stage, string.Empty, _font, 22, TextAnchor.MiddleCenter);
             var plateRt = (RectTransform)_centerNameplateText.transform;
-            plateRt.anchorMin = new Vector2(0.15f, 0.90f);
+            plateRt.anchorMin = new Vector2(0.15f, 0.86f);
             plateRt.anchorMax = new Vector2(0.85f, 0.99f);
             plateRt.offsetMin = Vector2.zero;
             plateRt.offsetMax = Vector2.zero;
@@ -511,57 +555,35 @@ namespace AO.Unity.AOStyle
             ghostRight.gameObject.SetActive(false);
 
             var navHost = AOStyleUiFactory.CreatePanel("CarouselNav", carouselHost, new Color(0f, 0f, 0f, 0f));
-            navHost.anchorMin = new Vector2(0.43f, 0.015f);
-            navHost.anchorMax = new Vector2(0.57f, 0.065f);
+            navHost.anchorMin = new Vector2(0.30f, 0.025f);
+            navHost.anchorMax = new Vector2(0.70f, 0.09f);
             navHost.offsetMin = Vector2.zero;
             navHost.offsetMax = Vector2.zero;
             navHost.SetAsLastSibling();
             var navLayout = navHost.gameObject.AddComponent<HorizontalLayoutGroup>();
             navLayout.spacing = 10f;
-            navLayout.childControlWidth = false;
-            navLayout.childControlHeight = false;
+            navLayout.childControlWidth = true;
+            navLayout.childControlHeight = true;
             navLayout.childForceExpandWidth = false;
             navLayout.childForceExpandHeight = false;
             navLayout.childAlignment = TextAnchor.MiddleCenter;
 
             var prevBtn = AOStyleUiFactory.CreateButton("Prev", navHost, "<", _font, () => SelectProfile(Mathf.Max(0, _selectedProfileIndex - 1)), 30f);
-            var prevImg = prevBtn.GetComponent<Image>();
-            if (prevImg != null)
-                prevImg.color = new Color(0.14f, 0.22f, 0.34f, 0.42f);
+            _previousCharacterButton = prevBtn;
             var prevText = prevBtn.GetComponentInChildren<Text>();
             if (prevText != null)
                 prevText.raycastTarget = false;
 
-            var dotsHost = AOStyleUiFactory.CreatePanel("CarouselDots", navHost, new Color(0f, 0f, 0f, 0f));
-            dotsHost.sizeDelta = new Vector2(160f, 18f);
-            var dotsLayout = dotsHost.gameObject.AddComponent<HorizontalLayoutGroup>();
-            dotsLayout.spacing = 6f;
-            dotsLayout.childControlWidth = false;
-            dotsLayout.childControlHeight = false;
-            dotsLayout.childForceExpandWidth = false;
-            dotsLayout.childForceExpandHeight = false;
-            dotsLayout.childAlignment = TextAnchor.MiddleCenter;
-            _carouselDots.Clear();
-            for (int i = 0; i < Mathf.Max(1, _profiles.Count); i++)
-            {
-                var dot = AOStyleUiFactory.CreatePanel($"Dot_{i}", dotsHost, new Color(0.55f, 0.67f, 0.78f, 0.45f));
-                dot.sizeDelta = new Vector2(8f, 8f);
-                var img = dot.GetComponent<Image>();
-                _carouselDots.Add(img);
-                int dotIndex = i;
-                var dotBtn = dot.gameObject.AddComponent<Button>();
-                dotBtn.onClick.AddListener(() => SelectProfile(dotIndex));
-            }
+            _carouselPositionText = AOStyleUiFactory.CreateText("CarouselPosition", navHost, string.Empty, _font, 13, TextAnchor.MiddleCenter);
+            _carouselPositionText.gameObject.AddComponent<LayoutElement>().preferredWidth = 90f;
+            _carouselPositionText.rectTransform.sizeDelta = new Vector2(90f, 30f);
 
             var nextBtn = AOStyleUiFactory.CreateButton("Next", navHost, ">", _font, () => SelectProfile(Mathf.Min(_profiles.Count - 1, _selectedProfileIndex + 1)), 30f);
-            var nextImg = nextBtn.GetComponent<Image>();
-            if (nextImg != null)
-                nextImg.color = new Color(0.14f, 0.22f, 0.34f, 0.42f);
+            _nextCharacterButton = nextBtn;
             var nextText = nextBtn.GetComponentInChildren<Text>();
             if (nextText != null)
                 nextText.raycastTarget = false;
-            navHost.gameObject.SetActive(false);
-            _carouselDots.Clear();
+            navHost.gameObject.SetActive(_profiles.Count > 1);
 
             for (int i = 0; i < _profiles.Count; i++)
             {
@@ -570,8 +592,7 @@ namespace AO.Unity.AOStyle
                 row.anchorMin = new Vector2(0f, 1f);
                 row.anchorMax = new Vector2(1f, 1f);
                 row.pivot = new Vector2(0.5f, 1f);
-                row.sizeDelta = new Vector2(0f, 42f);
-                row.anchoredPosition = new Vector2(0f, -i * 46f);
+                row.gameObject.AddComponent<LayoutElement>().preferredHeight = 48f;
                 var rowOutline = row.gameObject.AddComponent<Outline>();
                 rowOutline.effectColor = new Color(0.35f, 0.62f, 0.95f, 0.2f);
 
@@ -585,13 +606,8 @@ namespace AO.Unity.AOStyle
                 nameRt.anchorMax = new Vector2(1f, 1f);
                 nameRt.offsetMin = new Vector2(10f, 0f);
                 nameRt.offsetMax = new Vector2(-10f, 0f);
+                nameText.text = $"{_profiles[i].Name}\n<size=11><color=#91ADB9>Level {_profiles[i].Level} · {GetProfessionName(_profiles[i].ProfessionId)}</color></size>";
 
-            }
-
-            if (_sideListContent != null)
-            {
-                float height = Mathf.Max(0f, (_profiles.Count * 46f) + 6f);
-                _sideListContent.sizeDelta = new Vector2(_sideListContent.sizeDelta.x, height);
             }
 
             if (_selectedProfileIndex < 0 && _profiles.Count > 0)
@@ -611,6 +627,7 @@ namespace AO.Unity.AOStyle
 
         private void StartCreateFlow()
         {
+            if (_operationPending || !HasCharacterSlot) return;
             _editingExistingProfile = false;
             _draft.BreedId = 1;
             _draft.Sex = CharacterRuntimeBridge.CharacterSex.Male;
@@ -1305,6 +1322,7 @@ namespace AO.Unity.AOStyle
 
         private void SelectProfile(int index)
         {
+            if (_operationPending) return;
             if (_profiles.Count == 0)
             {
                 _selectedProfileIndex = -1;
@@ -1332,6 +1350,19 @@ namespace AO.Unity.AOStyle
 
         private void RefreshSelectionVisuals()
         {
+            if (_carouselPositionText != null)
+                _carouselPositionText.text = _selectedProfileIndex >= 0 ? $"{_selectedProfileIndex + 1} / {_profiles.Count}" : "0 / 0";
+            if (_capacityText != null)
+            {
+                string count = _characterLimit.HasValue
+                    ? $"{_profiles.Count}/{_characterLimit.Value} characters"
+                    : $"{_profiles.Count} characters · limit unavailable";
+                _capacityText.text = string.IsNullOrWhiteSpace(_serverName) ? count : $"{_serverName}\n{count}";
+            }
+            if (_previousCharacterButton != null)
+                _previousCharacterButton.interactable = _selectedProfileIndex > 0;
+            if (_nextCharacterButton != null)
+                _nextCharacterButton.interactable = _selectedProfileIndex >= 0 && _selectedProfileIndex < _profiles.Count - 1;
             for (int i = 0; i < _profileButtons.Count; i++)
             {
                 var image = _profileButtons[i].GetComponent<Image>();
@@ -1353,7 +1384,11 @@ namespace AO.Unity.AOStyle
             if (_backButton != null)
                 StyleActionButton(_backButton, false);
             if (_createButton != null)
+            {
+                _createButton.interactable = HasCharacterSlot;
+                _createButton.GetComponentInChildren<Text>().text = HasCharacterSlot ? "Create Character" : "Slots Full";
                 StyleActionButton(_createButton, false);
+            }
             if (_deleteButton != null)
             {
                 _deleteButton.interactable = _selectedProfileIndex >= 0 && _selectedProfileIndex < _profiles.Count;
@@ -1362,40 +1397,68 @@ namespace AO.Unity.AOStyle
             if (_playButton != null)
                 StyleActionButton(_playButton, true);
 
-            for (int i = 0; i < _carouselDots.Count; i++)
-            {
-                var dot = _carouselDots[i];
-                if (dot == null)
-                    continue;
-                bool active = i == _selectedProfileIndex;
-                dot.color = active
-                    ? new Color(0.23f, 0.87f, 0.95f, 0.95f)
-                    : new Color(0.55f, 0.67f, 0.78f, 0.45f);
-                var rt = dot.rectTransform;
-                if (rt != null)
-                    rt.sizeDelta = active ? new Vector2(14f, 8f) : new Vector2(8f, 8f);
-            }
         }
 
         private void RefreshSelectionDetails()
         {
             if (_selectedProfileIndex < 0 || _selectedProfileIndex >= _profiles.Count)
             {
-                _detailsText.text = "No character selected.\nCreate a character to enable Play.";
+                _detailsText.text = HasCharacterSlot
+                    ? "Your roster is empty.\n\nCreate your first character to begin."
+                    : "No character slots are available on this server.";
                 if (_centerNameplateText != null)
                     _centerNameplateText.text = string.Empty;
                 return;
             }
 
             var profile = _profiles[_selectedProfileIndex];
+            string profession = GetProfessionName(profile.ProfessionId);
+            string zone = string.IsNullOrWhiteSpace(profile.AreaName)
+                || string.Equals(profile.AreaName, "area unknown", StringComparison.OrdinalIgnoreCase)
+                ? (profile.StartPlayfieldId > 0 ? $"Playfield {profile.StartPlayfieldId}" : "Starting area")
+                : profile.AreaName;
             _detailsText.text =
-                $"{(profile.Name ?? string.Empty).ToUpperInvariant()}\n" +
-                $"LVL {profile.Level} {profile.ProfessionName?.ToUpperInvariant()}\n\n" +
-                $"Breed: {profile.BreedLabel}\n" +
-                $"Body: {profile.Height}/{profile.Weight}\n" +
-                $"Head: {(string.IsNullOrWhiteSpace(profile.HeadMeshKey) ? "Default" : profile.HeadMeshKey)}";
+                $"{profile.Name}\nLevel {profile.Level} {profession}\n\n" +
+                $"{profile.BreedLabel}\n\nLocation: {zone}" +
+                (profile.StartPlayfieldId > 0 && zone != $"Playfield {profile.StartPlayfieldId}"
+                    ? $"\nPF {profile.StartPlayfieldId}" : string.Empty);
             if (_centerNameplateText != null)
-                _centerNameplateText.text = string.Empty;
+                _centerNameplateText.text = $"{profile.Name}\nLevel {profile.Level} {profession}";
+        }
+
+        public static string GetProfessionName(int professionId)
+        {
+            return DefaultProfessionNames.TryGetValue(professionId, out string name)
+                ? name : "Unknown profession";
+        }
+
+        private void SetOperationPending(bool pending)
+        {
+            _operationPending = pending;
+            if (_root == null) return;
+            // Unity's missing/destroyed components require its overloaded null check.
+            if (_operationCanvasGroup == null)
+            {
+                _operationCanvasGroup = _root.GetComponent<CanvasGroup>();
+                if (_operationCanvasGroup == null)
+                    _operationCanvasGroup = _root.gameObject.AddComponent<CanvasGroup>();
+            }
+            _operationCanvasGroup.interactable = !pending;
+        }
+
+        private void Update()
+        {
+            if (_screenState != ScreenState.Select || _operationPending || UiInputUtility.IsTextInputFocused()
+                || (_deleteConfirmPanel != null && _deleteConfirmPanel.gameObject.activeSelf)) return;
+#if ENABLE_INPUT_SYSTEM
+            var keyboard = UnityEngine.InputSystem.Keyboard.current;
+            if (keyboard == null) return;
+            if (keyboard.leftArrowKey.wasPressedThisFrame) SelectProfile(_selectedProfileIndex - 1);
+            else if (keyboard.rightArrowKey.wasPressedThisFrame) SelectProfile(_selectedProfileIndex + 1);
+#else
+            if (Input.GetKeyDown(KeyCode.LeftArrow)) SelectProfile(_selectedProfileIndex - 1);
+            else if (Input.GetKeyDown(KeyCode.RightArrow)) SelectProfile(_selectedProfileIndex + 1);
+#endif
         }
 
         private void RefreshChoiceVisuals(int selectedIndex)
@@ -1426,14 +1489,16 @@ namespace AO.Unity.AOStyle
 
         private void OnPlayClicked()
         {
+            if (_operationPending) return;
             if (_selectedProfileIndex < 0 || _selectedProfileIndex >= _profiles.Count)
                 return;
 
             _onPlay?.Invoke(_profiles[_selectedProfileIndex]);
         }
 
-        private void CreateCharacter()
+        private async void CreateCharacter()
         {
+            if (_operationPending || !HasCharacterSlot) return;
             string rawName = _nameInput != null ? _nameInput.text : string.Empty;
             string cleaned = (rawName ?? string.Empty).Trim();
             if (cleaned.Length < 3 || cleaned.Length > 13)
@@ -1462,11 +1527,31 @@ namespace AO.Unity.AOStyle
                 StartPlayfieldId = 4604
             };
 
-            _profiles.Add(profile);
-            _selectedProfileIndex = _profiles.Count - 1;
-            _onProfilesChanged?.Invoke();
-            _statusText.text = $"Created {profile.Name}. Entering world...";
-            _onPlay?.Invoke(profile);
+            if (_onCreate == null)
+            {
+                SetConnectionStatus("Character creation is unavailable on this connection.");
+                return;
+            }
+            SetOperationPending(true);
+            SetConnectionStatus("Creating character…");
+            try
+            {
+                CharacterProfile created = await _onCreate(profile);
+                if (this == null) return;
+                if (created == null || string.IsNullOrWhiteSpace(created.ServerCharacterId))
+                    throw new InvalidOperationException("The server did not confirm character creation.");
+                _profiles.Add(created);
+                _selectedProfileIndex = _profiles.Count - 1;
+                _onProfilesChanged?.Invoke();
+                ShowSelectionScreen();
+                SetConnectionStatus($"Created {created.Name}. Entering world…");
+                _onPlay?.Invoke(created);
+            }
+            catch (Exception exception)
+            {
+                if (this != null) SetConnectionStatus(exception.Message);
+            }
+            finally { if (this != null) SetOperationPending(false); }
         }
 
         private void BuildDeleteConfirmPanel(RectTransform parent)
@@ -1521,6 +1606,7 @@ namespace AO.Unity.AOStyle
             if (_deleteConfirmPanel == null)
                 return;
 
+            if (_selectedProfileIndex < 0 || _selectedProfileIndex >= _profiles.Count || _operationPending) return;
             _deleteNameInput.text = string.Empty;
             _deleteConfirmPanel.gameObject.SetActive(true);
         }
@@ -1532,8 +1618,9 @@ namespace AO.Unity.AOStyle
             _deleteConfirmPanel.gameObject.SetActive(false);
         }
 
-        private void ConfirmDeleteCharacter()
+        private async void ConfirmDeleteCharacter()
         {
+            if (_operationPending) return;
             string typedName = (_deleteNameInput != null ? _deleteNameInput.text : string.Empty)?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(typedName))
             {
@@ -1541,33 +1628,38 @@ namespace AO.Unity.AOStyle
                 return;
             }
 
-            int index = _profiles.FindIndex(p => p != null && string.Equals((p.Name ?? string.Empty).Trim(), typedName, StringComparison.Ordinal));
-            if (index < 0)
+            int index = _selectedProfileIndex;
+            if (index < 0 || index >= _profiles.Count) return;
+            CharacterProfile selected = _profiles[index];
+            if (!string.Equals(selected.Name, typedName, StringComparison.Ordinal))
             {
-                _statusText.text = $"Delete failed: no exact character match for '{typedName}'.";
+                SetConnectionStatus($"Type '{selected.Name}' exactly to delete the selected character.");
                 return;
             }
-
-            string deleted = _profiles[index].Name;
-            _profiles.RemoveAt(index);
-            if (_profiles.Count == 0)
+            if (_onDelete == null)
             {
-                _selectedProfileIndex = -1;
+                SetConnectionStatus("Character deletion is unavailable on this connection.");
+                return;
             }
-            else if (_selectedProfileIndex >= _profiles.Count)
+            SetOperationPending(true);
+            SetConnectionStatus($"Deleting {selected.Name}…");
+            try
             {
-                _selectedProfileIndex = _profiles.Count - 1;
+                await _onDelete(selected);
+                if (this == null) return;
+                _profiles.RemoveAt(index);
+                _selectedProfileIndex = _profiles.Count == 0 ? -1 : Mathf.Min(index, _profiles.Count - 1);
+                _onProfilesChanged?.Invoke();
+                HideDeleteConfirm();
+                RebuildSelectionContent();
+                SetConnectionStatus($"Deleted character '{selected.Name}'.");
+                _onSelectionChanged?.Invoke(_selectedProfileIndex);
             }
-            else if (_selectedProfileIndex > index)
+            catch (Exception exception)
             {
-                _selectedProfileIndex--;
+                if (this != null) SetConnectionStatus(exception.Message);
             }
-
-            _onProfilesChanged?.Invoke();
-            HideDeleteConfirm();
-            RebuildSelectionContent();
-            _statusText.text = $"Deleted character '{deleted}'.";
-            _onSelectionChanged?.Invoke(_selectedProfileIndex);
+            finally { if (this != null) SetOperationPending(false); }
         }
 
         private static string ResolveBreedSexLabel(int breedId, CharacterRuntimeBridge.CharacterSex sex)
@@ -1697,17 +1789,19 @@ namespace AO.Unity.AOStyle
             if (button == null)
                 return;
 
-            var img = button.GetComponent<Image>();
-            if (img != null)
-                img.color = primary ? new Color(0.10f, 0.78f, 0.90f, button.interactable ? 0.92f : 0.45f) : new Color(0.12f, 0.20f, 0.30f, 0.92f);
+            AOStyleUiFactory.StyleButton(button, primary);
 
             var txt = button.GetComponentInChildren<Text>();
             if (txt != null)
                 txt.color = button.interactable ? new Color(0.94f, 0.98f, 1f, 1f) : new Color(0.72f, 0.79f, 0.86f, 0.85f);
 
-            var rt = button.transform as RectTransform;
-            if (rt != null)
-                rt.sizeDelta = primary ? new Vector2(130f, 34f) : new Vector2(150f, 34f);
+            var layout = button.GetComponent<LayoutElement>();
+            if (layout != null) layout.preferredHeight = 36f;
+            if (txt != null)
+            {
+                txt.fontSize = 13;
+                txt.fontStyle = primary ? FontStyle.Bold : FontStyle.Normal;
+            }
         }
 
         private static void AddSciFiFrameAccents(RectTransform parent)
@@ -1722,6 +1816,7 @@ namespace AO.Unity.AOStyle
                 line.anchorMax = max;
                 line.offsetMin = Vector2.zero;
                 line.offsetMax = Vector2.zero;
+                line.GetComponent<Image>().raycastTarget = false;
                 return line;
             }
 
@@ -1732,7 +1827,7 @@ namespace AO.Unity.AOStyle
             AddLine(parent, "RightLine", new Vector2(0.985f, 0.02f), new Vector2(0.988f, 0.98f), lineColor);
         }
 
-        private static RawImage CreateBackgroundImage(RectTransform parent)
+        public static RawImage CreateBackgroundImage(RectTransform parent)
         {
             var bgGo = new GameObject("CharacterSelectBackground", typeof(RectTransform), typeof(RawImage));
             bgGo.transform.SetParent(parent, false);
@@ -1803,6 +1898,7 @@ namespace AO.Unity.AOStyle
                 _infoCard.gameObject.SetActive(false);
             if (_sidePanel != null)
                 _sidePanel.gameObject.SetActive(false);
+            if (_capacityText != null) _capacityText.gameObject.SetActive(false);
             if (_mainButtonRow != null)
                 _mainButtonRow.gameObject.SetActive(false);
             if (_stepContent != null)

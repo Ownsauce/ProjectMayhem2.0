@@ -57,13 +57,11 @@ namespace AO.Unity.AOStyle
 
         private void Build()
         {
-            var root = AOStyleUiFactory.CreatePanel("CharacterSettingsRoot", transform, new Color(0f, 0f, 0f, 0f));
-            root.anchorMin = Vector2.zero;
-            root.anchorMax = Vector2.one;
-            root.offsetMin = Vector2.zero;
-            root.offsetMax = Vector2.zero;
-
-            var layout = root.gameObject.AddComponent<VerticalLayoutGroup>();
+            var root = AOStyleUiFactory.CreateScrollContent(transform);
+            var scroll = root.GetComponentInParent<ScrollRect>();
+            scroll.scrollSensitivity = 28f;
+            AOStyleUiFactory.AddVerticalScrollbar(scroll);
+            var layout = root.GetComponent<VerticalLayoutGroup>();
             layout.padding = new RectOffset(6, 6, 6, 6);
             layout.spacing = 6f;
             layout.childControlHeight = true;
@@ -133,7 +131,7 @@ namespace AO.Unity.AOStyle
             visualProfLayout.childControlHeight = true;
             visualProfLayout.childForceExpandHeight = false;
 
-            AOStyleUiFactory.CreateText("VisualProfessionLabel", visualProfRow, "VisualProfession", _font, 12, TextAnchor.MiddleLeft)
+            AOStyleUiFactory.CreateText("VisualProfessionLabel", visualProfRow, "Visual Prof.", _font, 12, TextAnchor.MiddleLeft)
                 .gameObject.AddComponent<LayoutElement>().preferredWidth = 100f;
             _visualProfessionValueText = AOStyleUiFactory.CreateText("VisualProfessionValue", visualProfRow, string.Empty, _font, 12, TextAnchor.MiddleLeft);
             _visualProfessionValueText.gameObject.AddComponent<LayoutElement>().preferredWidth = 320f;
@@ -179,9 +177,17 @@ namespace AO.Unity.AOStyle
                 .gameObject.AddComponent<LayoutElement>().preferredWidth = 40f;
             _runSpeedInput = AOStyleUiFactory.CreateInputField("RunSpeedInput", movementRow, "8", _font, 90f);
 
-            AOStyleUiFactory.CreateText("JumpHeightLabel", movementRow, "Jump", _font, 12, TextAnchor.MiddleLeft)
+            var jumpRow = AOStyleUiFactory.CreatePanel("JumpRow", root, Color.clear);
+            jumpRow.gameObject.AddComponent<LayoutElement>().preferredHeight = 28f;
+            var jumpLayout = jumpRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+            jumpLayout.spacing = 6f;
+            jumpLayout.childControlHeight = true;
+            jumpLayout.childForceExpandHeight = false;
+            jumpLayout.childControlWidth = true;
+            jumpLayout.childForceExpandWidth = false;
+            AOStyleUiFactory.CreateText("JumpHeightLabel", jumpRow, "Jump", _font, 12, TextAnchor.MiddleLeft)
                 .gameObject.AddComponent<LayoutElement>().preferredWidth = 45f;
-            _jumpHeightInput = AOStyleUiFactory.CreateInputField("JumpHeightInput", movementRow, "1.2", _font, 90f);
+            _jumpHeightInput = AOStyleUiFactory.CreateInputField("JumpHeightInput", jumpRow, "1.2", _font, 90f);
 
             var movementModeRow = AOStyleUiFactory.CreatePanel("MovementModeRow", root, new Color(0f, 0f, 0f, 0f));
             movementModeRow.gameObject.AddComponent<LayoutElement>().preferredHeight = 26f;
@@ -197,92 +203,24 @@ namespace AO.Unity.AOStyle
             _movementModeDropdown = CreateDropdown("MovementModeDropdown", movementModeRow, 220f);
 
             AOStyleUiFactory.CreateButton("ApplySettings", root, "Set Character", _font, ApplySettings, 140f);
+            foreach (Transform row in root)
+            {
+                var rowLayout = row.GetComponent<HorizontalLayoutGroup>();
+                if (rowLayout == null) continue;
+                rowLayout.childControlWidth = true;
+                foreach (Transform child in row)
+                {
+                    var element = child.GetComponent<LayoutElement>() ?? child.gameObject.AddComponent<LayoutElement>();
+                    bool field = child.GetComponent<Selectable>() != null || child == _visualProfessionValueText.transform;
+                    element.minWidth = field ? 80f : 72f;
+                    element.preferredWidth = field ? 220f : 72f;
+                    element.flexibleWidth = field ? 1f : 0f;
+                }
+            }
         }
 
         private Dropdown CreateDropdown(string name, Transform parent, float width)
-        {
-            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Dropdown));
-            go.transform.SetParent(parent, false);
-            go.GetComponent<Image>().color = new Color(0.16f, 0.2f, 0.28f, 1f);
-            var le = go.AddComponent<LayoutElement>();
-            le.preferredWidth = width;
-            le.preferredHeight = 22f;
-
-            var dropdown = go.GetComponent<Dropdown>();
-
-            var label = AOStyleUiFactory.CreateText("Label", go.transform, "", _font, 12, TextAnchor.MiddleLeft);
-            label.horizontalOverflow = HorizontalWrapMode.Overflow;
-            label.verticalOverflow = VerticalWrapMode.Overflow;
-            var labelRt = (RectTransform)label.transform;
-            labelRt.anchorMin = Vector2.zero;
-            labelRt.anchorMax = Vector2.one;
-            labelRt.offsetMin = new Vector2(6f, 2f);
-            labelRt.offsetMax = new Vector2(-24f, -2f);
-
-            var arrow = AOStyleUiFactory.CreateText("Arrow", go.transform, "v", _font, 12, TextAnchor.MiddleCenter);
-            var arrowRt = (RectTransform)arrow.transform;
-            arrowRt.anchorMin = new Vector2(1f, 0f);
-            arrowRt.anchorMax = new Vector2(1f, 1f);
-            arrowRt.pivot = new Vector2(1f, 0.5f);
-            arrowRt.sizeDelta = new Vector2(18f, 0f);
-            arrowRt.anchoredPosition = new Vector2(-4f, 0f);
-
-            var template = AOStyleUiFactory.CreatePanel("Template", go.transform, new Color(0.07f, 0.09f, 0.13f, 0.98f));
-            template.gameObject.SetActive(false);
-            template.anchorMin = new Vector2(0f, 0f);
-            template.anchorMax = new Vector2(1f, 0f);
-            template.pivot = new Vector2(0.5f, 1f);
-            template.anchoredPosition = new Vector2(0f, -2f);
-            template.sizeDelta = new Vector2(0f, 150f);
-            template.gameObject.AddComponent<ScrollRect>().vertical = true;
-            template.gameObject.AddComponent<Mask>().showMaskGraphic = false;
-
-            var viewport = AOStyleUiFactory.CreatePanel("Viewport", template, new Color(0f, 0f, 0f, 0.01f));
-            viewport.anchorMin = Vector2.zero;
-            viewport.anchorMax = Vector2.one;
-            viewport.offsetMin = Vector2.zero;
-            viewport.offsetMax = Vector2.zero;
-
-            var content = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
-            content.transform.SetParent(viewport, false);
-            var contentRt = (RectTransform)content.transform;
-            contentRt.anchorMin = new Vector2(0f, 1f);
-            contentRt.anchorMax = new Vector2(1f, 1f);
-            contentRt.pivot = new Vector2(0.5f, 1f);
-            contentRt.offsetMin = Vector2.zero;
-            contentRt.offsetMax = Vector2.zero;
-            var contentLayout = content.GetComponent<VerticalLayoutGroup>();
-            contentLayout.spacing = 0f;
-            contentLayout.childControlWidth = true;
-            contentLayout.childControlHeight = true;
-            contentLayout.childForceExpandWidth = true;
-            contentLayout.childForceExpandHeight = false;
-            var contentFitter = content.GetComponent<ContentSizeFitter>();
-            contentFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-
-            var item = AOStyleUiFactory.CreatePanel("Item", contentRt, new Color(0.16f, 0.2f, 0.28f, 1f));
-            item.gameObject.AddComponent<LayoutElement>().preferredHeight = 22f;
-            item.gameObject.AddComponent<Toggle>();
-            var itemLabel = AOStyleUiFactory.CreateText("ItemLabel", item, "Option", _font, 12, TextAnchor.MiddleLeft);
-            itemLabel.horizontalOverflow = HorizontalWrapMode.Overflow;
-            itemLabel.verticalOverflow = VerticalWrapMode.Overflow;
-            var itemLabelRt = (RectTransform)itemLabel.transform;
-            itemLabelRt.anchorMin = Vector2.zero;
-            itemLabelRt.anchorMax = Vector2.one;
-            itemLabelRt.offsetMin = new Vector2(6f, 0f);
-            itemLabelRt.offsetMax = new Vector2(-6f, 0f);
-
-            dropdown.template = template;
-            dropdown.captionText = label;
-            dropdown.itemText = itemLabel;
-
-            var scrollRect = template.GetComponent<ScrollRect>();
-            scrollRect.viewport = viewport;
-            scrollRect.content = contentRt;
-            scrollRect.movementType = ScrollRect.MovementType.Clamped;
-
-            return dropdown;
-        }
+            => AOStyleUiFactory.CreateDropdown(name, parent, _font, width);
 
         private void Refresh()
         {
@@ -365,7 +303,7 @@ namespace AO.Unity.AOStyle
             var bg = _sexDropdown.GetComponent<Image>();
             if (bg != null)
                 bg.color = _sexDropdown.interactable
-                    ? new Color(0.16f, 0.2f, 0.28f, 1f)
+                    ? AOStyleUiFactory.RaisedSurface
                     : new Color(0.24f, 0.24f, 0.24f, 0.8f);
 
             _sexDropdown.RefreshShownValue();

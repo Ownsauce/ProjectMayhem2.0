@@ -25,6 +25,7 @@ namespace AO.Client.Backends.AORebirth
         private NetworkStream _stream;
         private Stream _worldStream;
         private readonly SemaphoreSlim _writeGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _characterOperationGate = new SemaphoreSlim(1, 1);
         private ushort _messageId = 1;
         private bool _sentInPlay;
         private uint _zoneCookie1;
@@ -69,6 +70,21 @@ namespace AO.Client.Backends.AORebirth
         private WorldPacketMailbox _worldPackets;
         private Task _worldReaderTask;
         private IReadOnlyList<CharacterSummary> _characters = Array.Empty<CharacterSummary>();
+        public int? CharacterLimit { get; private set; }
+        public string ConnectedEndpoint { get; private set; }
+        private long _packetsSent;
+        private long _packetsReceived;
+        private long _lastPacketReceivedTicks;
+        public long PacketsSent => Interlocked.Read(ref _packetsSent);
+        public long PacketsReceived => Interlocked.Read(ref _packetsReceived);
+        public DateTime? LastPacketReceivedUtc
+        {
+            get
+            {
+                long ticks = Interlocked.Read(ref _lastPacketReceivedTicks);
+                return ticks == 0 ? (DateTime?)null : new DateTime(ticks, DateTimeKind.Utc);
+            }
+        }
         private CharacterSummary _selectedCharacter;
         private int _currentPlayfieldId;
         private readonly Dictionary<string, NearbyEntity> _worldEntities =
@@ -104,6 +120,7 @@ namespace AO.Client.Backends.AORebirth
             BackendCapabilities.Authentication
             | BackendCapabilities.CharacterList
             | BackendCapabilities.CharacterSelection
+            | BackendCapabilities.CharacterManagement
             | BackendCapabilities.WorldEntry
             | BackendCapabilities.WorldState
             | BackendCapabilities.Inventory
@@ -128,6 +145,10 @@ namespace AO.Client.Backends.AORebirth
             _characterState = null;
             _inventoryChanged = false;
             LastSelectedAppearanceDecodeFailure = null;
+            Interlocked.Exchange(ref _packetsSent, 0);
+            Interlocked.Exchange(ref _packetsReceived, 0);
+            Interlocked.Exchange(ref _lastPacketReceivedTicks, 0);
+            ConnectedEndpoint = $"{endpoint.Address.Host}:{endpoint.Address.Port}";
             SetState(ClientConnectionState.Connecting, $"Connecting to {endpoint.Name}.");
             _messageId = 1;
             _sentInPlay = false;
@@ -181,6 +202,7 @@ namespace AO.Client.Backends.AORebirth
                 {
                     int error = AORebirthProtocol.ReadLoginError(response);
                     _characters = Array.Empty<CharacterSummary>();
+                    CharacterLimit = null;
                     SetState(ClientConnectionState.Connected, "Authentication rejected.");
                     string message = error == 0x14 ? "This account is already logged in."
                         : error == 0x6A ? "Invalid username or password."
@@ -192,7 +214,8 @@ namespace AO.Client.Backends.AORebirth
                 if (response.SystemMessageType != AORebirthProtocol.CharacterList)
                     throw new InvalidDataException($"Unexpected login response 0x{response.SystemMessageType:X8}.");
 
-                _characters = AORebirthProtocol.ReadCharacterList(response);
+                _characters = AORebirthProtocol.ReadCharacterList(response, out int allowedCharacters);
+                CharacterLimit = allowedCharacters;
                 SetState(ClientConnectionState.Authenticated, "Authentication succeeded.");
                 return AuthenticationResult.Success(request.Username, "Character list received.");
             }
@@ -213,7 +236,99 @@ namespace AO.Client.Backends.AORebirth
             return Task.FromResult(_characters);
         }
 
-        public async Task<WorldEntryResult> EnterWorldAsync(
+        public async Task<CharacterSummary> CreateCharacterAsync(CharacterCreationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+            await _characterOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                RequireCharacterManagementSession();
+                if (CharacterLimit.HasValue && _characters.Count >= CharacterLimit.Value)
+                    throw new InvalidOperationException("All character slots on this server are occupied.");
+                AORebirthPacket response = await ExchangeCharacterOperationAsync(
+                    AORebirthProtocol.CreateCharacterRequest(request), cancellationToken).ConfigureAwait(false);
+                if (response.SystemMessageType == AORebirthProtocol.NameInUse)
+                    throw new InvalidOperationException("That character name is unavailable. Choose another name.");
+                int id;
+                try { id = AORebirthProtocol.ReadCharacterAcknowledgement(response, AORebirthProtocol.CharacterCreated); }
+                catch { SetState(ClientConnectionState.Faulted, "Character creation response was invalid. Sign in again to refresh the list."); throw; }
+                var created = new CharacterSummary(id.ToString(CultureInfo.InvariantCulture), request.Name,
+                    1, request.ProfessionId, request.BreedId, genderId: request.GenderId);
+                var updated = new List<CharacterSummary>(_characters);
+                if (updated.Exists(character => character.Id == created.Id))
+                {
+                    SetState(ClientConnectionState.Faulted, "The server returned an existing character ID.");
+                    throw new InvalidDataException("The server returned an existing character ID. Sign in again.");
+                }
+                updated.Add(created);
+                _characters = updated.AsReadOnly();
+                return created;
+            }
+            finally { _characterOperationGate.Release(); }
+        }
+
+        public async Task DeleteCharacterAsync(string characterId,
+            CancellationToken cancellationToken = default)
+        {
+            if (!int.TryParse(characterId, NumberStyles.None, CultureInfo.InvariantCulture, out int id) || id <= 0)
+                throw new ArgumentException("A valid server character ID is required.", nameof(characterId));
+            await _characterOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                RequireCharacterManagementSession();
+                var updated = new List<CharacterSummary>(_characters);
+                if (!updated.Exists(character => character.Id == characterId))
+                    throw new InvalidOperationException("Select a character from the authenticated account.");
+                AORebirthPacket response = await ExchangeCharacterOperationAsync(
+                    AORebirthProtocol.CreateDeleteCharacter(id), cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    if (AORebirthProtocol.ReadCharacterAcknowledgement(response, AORebirthProtocol.CharacterDeleted) != id)
+                        throw new InvalidDataException("The server acknowledged deletion of a different character.");
+                }
+                catch { SetState(ClientConnectionState.Faulted, "Character deletion response was invalid. Sign in again to refresh the list."); throw; }
+                updated.RemoveAll(character => character.Id == characterId);
+                _characters = updated.AsReadOnly();
+            }
+            finally { _characterOperationGate.Release(); }
+        }
+
+        private void RequireCharacterManagementSession()
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.Authenticated)
+                throw new InvalidOperationException("Sign in and return to character selection before changing characters.");
+        }
+
+        private async Task<AORebirthPacket> ExchangeCharacterOperationAsync(byte[] request,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await WritePacketAsync(request, cancellationToken).ConfigureAwait(false);
+                AORebirthPacket response = await ReadPacketAsync(cancellationToken).ConfigureAwait(false);
+                if (response.SystemMessageType == AORebirthProtocol.LoginError)
+                    throw new InvalidOperationException($"The server rejected the character operation (error 0x{AORebirthProtocol.ReadLoginError(response):X8}). Sign in again.");
+                return response;
+            }
+            catch
+            {
+                // A late acknowledgement must never be consumed by a subsequent operation.
+                SetState(ClientConnectionState.Faulted, "Character operation did not complete. Sign in again to refresh the list.");
+                throw;
+            }
+        }
+
+        public async Task<WorldEntryResult> EnterWorldAsync(string characterId,
+            CancellationToken cancellationToken = default)
+        {
+            await _characterOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try { return await EnterWorldCoreAsync(characterId, cancellationToken).ConfigureAwait(false); }
+            finally { _characterOperationGate.Release(); }
+        }
+
+        private async Task<WorldEntryResult> EnterWorldCoreAsync(
             string characterId,
             CancellationToken cancellationToken = default)
         {
@@ -259,6 +374,7 @@ namespace AO.Client.Backends.AORebirth
                 _zoneCookie2 = zone.Cookie2;
 
                 await CloseTransportAsync().ConfigureAwait(false);
+                ConnectedEndpoint = $"{zone.Address}:{zone.Port}";
                 _client = new TcpClient();
                 _messageId = 1;
                 using (cancellationToken.Register(() => _client?.Close()))
@@ -588,6 +704,7 @@ namespace AO.Client.Backends.AORebirth
                     CultureInfo.InvariantCulture, out int characterId))
                 throw new InvalidDataException("Cannot redirect without a selected character.");
 
+            ConnectedEndpoint = $"{address}:{port}";
             SetState(ClientConnectionState.EnteringWorld,
                 $"Zone redirect received; reconnecting to {address}:{port}.");
             await CloseTransportAsync().ConfigureAwait(false);
@@ -823,6 +940,7 @@ namespace AO.Client.Backends.AORebirth
             SetState(ClientConnectionState.Disconnecting, "Disconnecting.");
             await CloseTransportAsync().ConfigureAwait(false);
             _characters = Array.Empty<CharacterSummary>();
+            CharacterLimit = null;
             _selectedCharacter = null;
             _currentPlayfieldId = 0;
             _bootstrapServerMessages.Clear();
@@ -843,6 +961,7 @@ namespace AO.Client.Backends.AORebirth
             _stream = null;
             _client = null;
             _characters = Array.Empty<CharacterSummary>();
+            CharacterLimit = null;
             _selectedCharacter = null;
             _currentPlayfieldId = 0;
             _bootstrapServerMessages.Clear();
@@ -865,6 +984,7 @@ namespace AO.Client.Backends.AORebirth
                 if (wire[2] == 0 && wire[3] == AORebirthProtocol.N3PacketType)
                     wire[15] = 2;
                 await stream.WriteAsync(wire, 0, wire.Length, cancellationToken).ConfigureAwait(false);
+                Interlocked.Increment(ref _packetsSent);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
             finally { _writeGate.Release(); }
@@ -904,6 +1024,8 @@ namespace AO.Client.Backends.AORebirth
                                     | (body[2] << 8)
                                     | body[3];
             }
+            Interlocked.Increment(ref _packetsReceived);
+            Interlocked.Exchange(ref _lastPacketReceivedTicks, DateTime.UtcNow.Ticks);
             return new AORebirthPacket(packetType, systemMessageType, body,
                 new BigEndianReader(header, 8).ReadInt32());
         }

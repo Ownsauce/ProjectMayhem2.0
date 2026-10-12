@@ -13,6 +13,13 @@ namespace AO.Unity.World
         }
 
         public Character Character { get; private set; }
+        public AO.Client.World.NearbyEntity ServerEntity { get; private set; }
+
+        public void SetServerEntity(AO.Client.World.NearbyEntity entity)
+        {
+            ServerEntity = entity;
+            DisplayNameOverride = entity?.Name ?? string.Empty;
+        }
         [SerializeField] private CharacterSex sex = CharacterSex.Male;
         [SerializeField] private int debugHeadVisualAoid;
         [SerializeField] private string displayNameOverride = string.Empty;

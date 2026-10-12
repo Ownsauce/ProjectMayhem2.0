@@ -746,13 +746,15 @@ namespace AO.Unity.World
                 overlayCanvas.overrideSorting = true;
                 overlayCanvas.sortingOrder = short.MaxValue;
             }
-            StartLoadingLogoSweepAnimation();
+            SetLoadingMessage("Loading…");
+            StartLoadingIndicatorAnimation();
         }
 
         public void BeginExternalWorldEntryLoading()
         {
             _externalWorldEntryLoadingHold = true;
             ShowPlayfieldLoadingOverlay();
+            SetLoadingMessage("Entering world…");
         }
 
         public void EndExternalWorldEntryLoading()
@@ -776,165 +778,46 @@ namespace AO.Unity.World
 
             if (immediate || _playfieldLoadingOverlayShownAt < 0f)
             {
-                StopLoadingLogoSweepAnimation();
+                StopLoadingIndicatorAnimation();
                 _playfieldLoadingOverlayRoot.SetActive(false);
                 _playfieldLoadingOverlayShownAt = -1f;
                 return;
             }
 
-            StopLoadingLogoSweepAnimation();
+            StopLoadingIndicatorAnimation();
             _playfieldLoadingOverlayRoot?.SetActive(false);
             _playfieldLoadingOverlayShownAt = -1f;
         }
 
-        private void StartLoadingLogoSweepAnimation()
+        private void StartLoadingIndicatorAnimation()
         {
-            if (_playfieldLoadingOverlayLogoPHighlightMaskRect == null
-                || _playfieldLoadingOverlayLogoMHighlightMaskRect == null
-                || _playfieldLoadingOverlayLogoPHighlightImage == null
-                || _playfieldLoadingOverlayLogoMHighlightImage == null)
-                return;
-
-            if (_playfieldLoadingOverlayLogoSweepCoroutine != null)
-                StopCoroutine(_playfieldLoadingOverlayLogoSweepCoroutine);
-
-            _playfieldLoadingOverlayLogoPHighlightImage.enabled = true;
-            _playfieldLoadingOverlayLogoMHighlightImage.enabled = true;
-            _playfieldLoadingOverlayLogoSweepCoroutine = StartCoroutine(AnimateLoadingLogoSweep());
+            StopLoadingIndicatorAnimation();
+            _loadingIndicatorCoroutine = StartCoroutine(AnimateLoadingIndicator());
         }
 
-        private void StopLoadingLogoSweepAnimation()
+        private void StopLoadingIndicatorAnimation()
         {
-            if (_playfieldLoadingOverlayLogoSweepCoroutine != null)
-            {
-                StopCoroutine(_playfieldLoadingOverlayLogoSweepCoroutine);
-                _playfieldLoadingOverlayLogoSweepCoroutine = null;
-            }
-
-            if (_playfieldLoadingOverlayLogoPHighlightImage != null)
-                _playfieldLoadingOverlayLogoPHighlightImage.enabled = false;
-
-            if (_playfieldLoadingOverlayLogoMHighlightImage != null)
-                _playfieldLoadingOverlayLogoMHighlightImage.enabled = false;
-
-            if (_playfieldLoadingOverlayLogoPHighlightMaskRect != null)
-                _playfieldLoadingOverlayLogoPHighlightMaskRect.anchoredPosition = Vector2.zero;
-
-            if (_playfieldLoadingOverlayLogoMHighlightMaskRect != null)
-                _playfieldLoadingOverlayLogoMHighlightMaskRect.anchoredPosition = Vector2.zero;
-
-            if (_playfieldLoadingOverlayLogoPHighlightRect != null)
-                _playfieldLoadingOverlayLogoPHighlightRect.anchoredPosition = Vector2.zero;
-
-            if (_playfieldLoadingOverlayLogoMHighlightRect != null)
-                _playfieldLoadingOverlayLogoMHighlightRect.anchoredPosition = Vector2.zero;
-
-            if (_playfieldLoadingOverlayLogo != null)
-                _playfieldLoadingOverlayLogo.color = playfieldLoadingLogoTint;
+            if (_loadingIndicatorCoroutine != null)
+                StopCoroutine(_loadingIndicatorCoroutine);
+            _loadingIndicatorCoroutine = null;
         }
 
-        private System.Collections.IEnumerator AnimateLoadingLogoSweep()
+        private System.Collections.IEnumerator AnimateLoadingIndicator()
         {
-            float highlightDuration = Mathf.Max(0.15f, playfieldLoadingLogoLetterHighlightDurationSeconds);
-            float pause = Mathf.Max(0f, playfieldLoadingLogoSweepPauseSeconds);
-            float pulseDuration = Mathf.Max(0.25f, playfieldLoadingLogoPulseDurationSeconds);
-            float pulseAmount = Mathf.Clamp(playfieldLoadingLogoPulseAmount, 0f, 0.35f);
-            Color pSweepColor = playfieldLoadingLogoPSweepTint;
-            pSweepColor.a = Mathf.Clamp01(pSweepColor.a);
-            Color mSweepColor = playfieldLoadingLogoMSweepTint;
-            mSweepColor.a = Mathf.Clamp01(mSweepColor.a);
-            Color baseColor = playfieldLoadingLogoTint;
-            float baseAlpha = Mathf.Clamp01(baseColor.a);
-
             while (_playfieldLoadingOverlayRoot != null && _playfieldLoadingOverlayRoot.activeInHierarchy)
             {
-                if (_playfieldLoadingOverlayLogoRect == null
-                    || _playfieldLoadingOverlayLogoPHighlightMaskRect == null
-                    || _playfieldLoadingOverlayLogoMHighlightMaskRect == null
-                    || _playfieldLoadingOverlayLogoPHighlightImage == null
-                    || _playfieldLoadingOverlayLogoMHighlightImage == null)
-                {
-                    yield return null;
-                    continue;
-                }
-
-                Rect logoRect = _playfieldLoadingOverlayLogoRect.rect;
-                float logoWidth = Mathf.Max(1f, logoRect.width);
-                float logoHeight = Mathf.Max(1f, logoRect.height);
-                float highlightWidthNorm = Mathf.Clamp(playfieldLoadingLogoLetterHighlightWidthNormalized, 0.05f, 0.95f);
-                float highlightHeightNorm = Mathf.Clamp(playfieldLoadingLogoLetterHighlightHeightNormalized, 0.05f, 0.95f);
-                float highlightWidth = Mathf.Max(24f, logoWidth * highlightWidthNorm);
-                float highlightHeight = Mathf.Max(24f, logoHeight * highlightHeightNorm);
-                float pNorm = Mathf.Clamp01(playfieldLoadingLogoPPositionNormalized);
-                float mNorm = Mathf.Clamp01(playfieldLoadingLogoMPositionNormalized);
-                float yNorm = Mathf.Clamp01(playfieldLoadingLogoLetterYPositionNormalized);
-                float pX = Mathf.Lerp(-0.5f * logoWidth, 0.5f * logoWidth, pNorm);
-                float mX = Mathf.Lerp(-0.5f * logoWidth, 0.5f * logoWidth, mNorm);
-                float y = Mathf.Lerp(-0.5f * logoHeight, 0.5f * logoHeight, yNorm);
-
-                _playfieldLoadingOverlayLogoPHighlightMaskRect.sizeDelta = new Vector2(highlightWidth, highlightHeight);
-                _playfieldLoadingOverlayLogoPHighlightMaskRect.anchoredPosition = new Vector2(pX, y);
-                _playfieldLoadingOverlayLogoMHighlightMaskRect.sizeDelta = new Vector2(highlightWidth, highlightHeight);
-                _playfieldLoadingOverlayLogoMHighlightMaskRect.anchoredPosition = new Vector2(mX, y);
-
-                if (_playfieldLoadingOverlayLogoPHighlightRect != null)
-                {
-                    _playfieldLoadingOverlayLogoPHighlightRect.sizeDelta = new Vector2(logoWidth, logoHeight);
-                    _playfieldLoadingOverlayLogoPHighlightRect.anchoredPosition = new Vector2(-pX, -y);
-                }
-
-                if (_playfieldLoadingOverlayLogoMHighlightRect != null)
-                {
-                    _playfieldLoadingOverlayLogoMHighlightRect.sizeDelta = new Vector2(logoWidth, logoHeight);
-                    _playfieldLoadingOverlayLogoMHighlightRect.anchoredPosition = new Vector2(-mX, -y);
-                }
-
-                for (int letterIndex = 0; letterIndex < 2; letterIndex++)
-                {
-                    bool pActive = letterIndex == 0;
-                    float elapsed = 0f;
-                    while (elapsed < highlightDuration && _playfieldLoadingOverlayRoot != null && _playfieldLoadingOverlayRoot.activeInHierarchy)
-                    {
-                        elapsed += Time.unscaledDeltaTime;
-                        float t = Mathf.Clamp01(elapsed / highlightDuration);
-                        float fade = Mathf.Sin(t * Mathf.PI);
-                        Color pColor = pSweepColor;
-                        pColor.a *= pActive ? fade : 0.05f;
-                        Color mColor = mSweepColor;
-                        mColor.a *= pActive ? 0.05f : fade;
-                        _playfieldLoadingOverlayLogoPHighlightImage.color = pColor;
-                        _playfieldLoadingOverlayLogoMHighlightImage.color = mColor;
-
-                        if (_playfieldLoadingOverlayLogo != null)
-                        {
-                            float pulse = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * (2f * Mathf.PI / pulseDuration));
-                            float alpha = Mathf.Clamp01(baseAlpha - (pulseAmount * 0.5f) + (pulse * pulseAmount));
-                            _playfieldLoadingOverlayLogo.color = new Color(baseColor.r, baseColor.g, baseColor.b, alpha);
-                        }
-                        yield return null;
-                    }
-
-                    if (pause > 0f)
-                    {
-                        float pauseElapsed = 0f;
-                        while (pauseElapsed < pause && _playfieldLoadingOverlayRoot != null && _playfieldLoadingOverlayRoot.activeInHierarchy)
-                        {
-                            pauseElapsed += Time.unscaledDeltaTime;
-                            if (_playfieldLoadingOverlayLogo != null)
-                            {
-                                float pulse = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * (2f * Mathf.PI / pulseDuration));
-                                float alpha = Mathf.Clamp01(baseAlpha - (pulseAmount * 0.5f) + (pulse * pulseAmount));
-                                _playfieldLoadingOverlayLogo.color = new Color(baseColor.r, baseColor.g, baseColor.b, alpha);
-                            }
-                            yield return null;
-                        }
-                    }
-                }
+                // Movement alone conveys activity; the logo and colors remain steady.
+                if (_loadingIndicator != null)
+                    _loadingIndicator.anchoredPosition = new Vector2(
+                        Mathf.Sin((Time.realtimeSinceStartup - _playfieldLoadingOverlayShownAt) * 1.8f) * 120f, 0f);
+                yield return null;
             }
+        }
 
-            if (_playfieldLoadingOverlayLogo != null)
-                _playfieldLoadingOverlayLogo.color = playfieldLoadingLogoTint;
-            _playfieldLoadingOverlayLogoSweepCoroutine = null;
+        public void SetLoadingMessage(string message)
+        {
+            if (_loadingStatusText != null)
+                _loadingStatusText.text = string.IsNullOrWhiteSpace(message) ? "Loading…" : message;
         }
 
         private void ConfigureLoadingLogoRect(RectTransform target)
@@ -942,21 +825,10 @@ namespace AO.Unity.World
             if (target == null)
                 return;
 
-            if (playfieldLoadingLogoFillScreen)
-            {
-                target.anchorMin = Vector2.zero;
-                target.anchorMax = Vector2.one;
-                target.offsetMin = Vector2.zero;
-                target.offsetMax = Vector2.zero;
-            }
-            else
-            {
-                target.anchorMin = new Vector2(0.5f, 0.5f);
-                target.anchorMax = new Vector2(0.5f, 0.5f);
-                target.pivot = new Vector2(0.5f, 0.5f);
-                target.sizeDelta = playfieldLoadingLogoSize;
-                target.anchoredPosition = Vector2.zero;
-            }
+            target.anchorMin = Vector2.zero;
+            target.anchorMax = Vector2.one;
+            target.offsetMin = Vector2.zero;
+            target.offsetMax = Vector2.zero;
         }
 
         private void EnsurePlayfieldLoadingOverlay()
@@ -971,7 +843,10 @@ namespace AO.Unity.World
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.overrideSorting = true;
             canvas.sortingOrder = short.MaxValue;
-            root.AddComponent<CanvasScaler>();
+            var scaler = root.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1280f, 720f);
+            scaler.matchWidthOrHeight = 0.5f;
             root.AddComponent<GraphicRaycaster>();
 
             var rootRect = root.GetComponent<RectTransform>();
@@ -988,44 +863,24 @@ namespace AO.Unity.World
             bgRect.offsetMin = Vector2.zero;
             bgRect.offsetMax = Vector2.zero;
             var bg = bgGo.AddComponent<Image>();
-            bg.color = playfieldLoadingOverlayColor;
-            bg.raycastTarget = false;
+            bg.color = new Color(0.015f, 0.025f, 0.04f, 1f);
+            bg.raycastTarget = true;
 
             var logoGo = new GameObject("Logo");
             logoGo.transform.SetParent(root.transform, false);
             var logoRect = logoGo.AddComponent<RectTransform>();
             ConfigureLoadingLogoRect(logoRect);
-            _playfieldLoadingOverlayLogoRect = logoRect;
 
             _playfieldLoadingOverlayLogo = logoGo.AddComponent<Image>();
             _playfieldLoadingOverlayLogo.color = playfieldLoadingLogoTint;
             _playfieldLoadingOverlayLogo.raycastTarget = false;
-            _playfieldLoadingOverlayLogo.preserveAspect = !playfieldLoadingLogoFillScreen;
+            _playfieldLoadingOverlayLogo.preserveAspect = false;
 
             Sprite logo = TryLoadLaunchLogoSprite(playfieldLoadingLogoResourcePath);
 
             if (logo != null)
             {
                 _playfieldLoadingOverlayLogo.sprite = logo;
-                CreateLetterHighlight(
-                    root.transform,
-                    "PHighlightMask",
-                    "PHighlight",
-                    logo,
-                    playfieldLoadingLogoPSweepTint,
-                    out _playfieldLoadingOverlayLogoPHighlightMaskRect,
-                    out _playfieldLoadingOverlayLogoPHighlightRect,
-                    out _playfieldLoadingOverlayLogoPHighlightImage);
-
-                CreateLetterHighlight(
-                    root.transform,
-                    "MHighlightMask",
-                    "MHighlight",
-                    logo,
-                    playfieldLoadingLogoMSweepTint,
-                    out _playfieldLoadingOverlayLogoMHighlightMaskRect,
-                    out _playfieldLoadingOverlayLogoMHighlightRect,
-                    out _playfieldLoadingOverlayLogoMHighlightImage);
             }
             else
             {
@@ -1035,43 +890,45 @@ namespace AO.Unity.World
                     $"{BuildLaunchLogoResourceDebug(playfieldLoadingLogoResourcePath)}");
             }
 
+            // Keep the indicator readable over every part of the full-screen artwork.
+            var panelGo = new GameObject("LoadingPanel", typeof(RectTransform), typeof(Image));
+            panelGo.transform.SetParent(root.transform, false);
+            var panelRect = panelGo.GetComponent<RectTransform>();
+            panelRect.anchorMin = panelRect.anchorMax = new Vector2(0.5f, 0.5f);
+            panelRect.sizeDelta = new Vector2(440f, 110f);
+            panelGo.GetComponent<Image>().color = new Color(0.015f, 0.025f, 0.04f, 0.96f);
+            panelGo.GetComponent<Image>().raycastTarget = false;
+
+            var statusGo = new GameObject("LoadingStatus", typeof(RectTransform), typeof(Text));
+            statusGo.transform.SetParent(panelGo.transform, false);
+            _loadingStatusText = statusGo.GetComponent<Text>();
+            _loadingStatusText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            _loadingStatusText.fontSize = 20;
+            _loadingStatusText.alignment = TextAnchor.MiddleCenter;
+            _loadingStatusText.color = new Color(0.92f, 0.96f, 1f, 1f);
+            _loadingStatusText.raycastTarget = false;
+            _loadingStatusText.text = "Loading…";
+            var statusRect = statusGo.GetComponent<RectTransform>();
+            statusRect.anchorMin = statusRect.anchorMax = new Vector2(0.5f, 0.65f);
+            statusRect.sizeDelta = new Vector2(400f, 42f);
+
+            var trackGo = new GameObject("LoadingTrack", typeof(RectTransform), typeof(Image));
+            trackGo.transform.SetParent(panelGo.transform, false);
+            var trackRect = trackGo.GetComponent<RectTransform>();
+            trackRect.anchorMin = trackRect.anchorMax = new Vector2(0.5f, 0.3f);
+            trackRect.sizeDelta = new Vector2(320f, 6f);
+            trackGo.GetComponent<Image>().color = new Color(0.12f, 0.19f, 0.25f, 1f);
+            trackGo.GetComponent<Image>().raycastTarget = false;
+            var indicatorGo = new GameObject("LoadingIndicator", typeof(RectTransform), typeof(Image));
+            indicatorGo.transform.SetParent(trackGo.transform, false);
+            _loadingIndicator = indicatorGo.GetComponent<RectTransform>();
+            _loadingIndicator.anchorMin = _loadingIndicator.anchorMax = new Vector2(0.5f, 0.5f);
+            _loadingIndicator.sizeDelta = new Vector2(80f, 6f);
+            indicatorGo.GetComponent<Image>().color = new Color(0.45f, 0.85f, 1f, 1f);
+            indicatorGo.GetComponent<Image>().raycastTarget = false;
+
             _playfieldLoadingOverlayRoot = root;
             _playfieldLoadingOverlayRoot.SetActive(false);
-        }
-
-        private void CreateLetterHighlight(
-            Transform parent,
-            string maskName,
-            string imageName,
-            Sprite logo,
-            Color tint,
-            out RectTransform maskRect,
-            out RectTransform highlightRect,
-            out Image highlightImage)
-        {
-            var maskGo = new GameObject(maskName);
-            maskGo.transform.SetParent(parent, false);
-            maskRect = maskGo.AddComponent<RectTransform>();
-            maskRect.anchorMin = new Vector2(0.5f, 0.5f);
-            maskRect.anchorMax = new Vector2(0.5f, 0.5f);
-            maskRect.pivot = new Vector2(0.5f, 0.5f);
-            maskRect.anchoredPosition = Vector2.zero;
-            maskGo.AddComponent<RectMask2D>();
-
-            var highlightGo = new GameObject(imageName);
-            highlightGo.transform.SetParent(maskGo.transform, false);
-            highlightRect = highlightGo.AddComponent<RectTransform>();
-            highlightRect.anchorMin = new Vector2(0.5f, 0.5f);
-            highlightRect.anchorMax = new Vector2(0.5f, 0.5f);
-            highlightRect.pivot = new Vector2(0.5f, 0.5f);
-            highlightRect.anchoredPosition = Vector2.zero;
-
-            highlightImage = highlightGo.AddComponent<Image>();
-            highlightImage.sprite = logo;
-            highlightImage.color = tint;
-            highlightImage.raycastTarget = false;
-            highlightImage.preserveAspect = !playfieldLoadingLogoFillScreen;
-            highlightImage.enabled = false;
         }
 
         private static Sprite TryLoadLaunchLogoSprite(string resourcePath)

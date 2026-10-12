@@ -4,6 +4,22 @@
 AO server. `IGameServerBackend` defines the first vertical slice: connect,
 authenticate, list characters, select a character, and enter the world.
 
+Character creation and deletion use `CharacterManagement` and the shared
+`CharacterCreationRequest`. The AORebirth adapter sends native login-server
+requests and updates its roster only after a valid server acknowledgement.
+Creation retains the returned server ID; deletion requires an ID from the
+authenticated account and a matching deletion acknowledgement. Unavailable
+names leave the session usable. Interrupted or malformed replies require a
+fresh sign-in to reconcile the roster rather than allowing a late reply to
+complete another operation.
+
+The login character list includes profession, breed, gender, and playfield,
+but does not supply a full appearance snapshot. Unity resolves zone names from
+the installation when the server supplies no useful area name. Head/body
+previews use appearance cached after world entry, matched by server, account,
+and character ID. Characters without that cache use a default breed/gender
+preview; current equipped appearance cannot be guaranteed from the login list.
+
 Backend wire types belong under `Backends/<backend-name>` and must be translated
 to the shared models before reaching Unity. Planned adapters include the live
 service, Ithaca, AORebirth, and the existing Project Mayhem TCP/JSON test server.
@@ -40,3 +56,13 @@ Static world state currently includes vending machines with names, playfields,
 direct transforms, or transforms resolved through their linked NPC dynels.
 Door and corpse full updates are retained safely by identity while their richer
 capture-dependent layouts remain backend-specific work.
+
+The backend exposes `CharacterLimit` from the login roster response. It is unknown
+before authentication and cleared on disconnect. Character creation is blocked
+locally once the acknowledged roster reaches that account/server limit.
+
+Connection diagnostics expose the active login/zone endpoint, successfully sent
+and received packet counts, and the UTC time of the last complete received packet.
+Counts reset for a new connection and include authentication and zone traffic.
+The AORebirth adapter currently does not expose a server tick; UI diagnostics show
+that value as unavailable rather than reuse the legacy JSON client tick.

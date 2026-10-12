@@ -14,6 +14,11 @@ namespace AO.Client.Backends.AORebirth
         public const int ServerSalt = 0x00000024;
         public const int LoginError = 0x0000000D;
         public const int CharacterList = 0x0000000E;
+        public const int CreateCharacter = 0x0000000F;
+        public const int NameInUse = 0x00000010;
+        public const int CharacterCreated = 0x00000011;
+        public const int DeleteCharacter = 0x00000014;
+        public const int CharacterDeleted = 0x00000015;
         public const int ZoneInfo = 0x00000017;
         public const int ZoneLogin = 0x0000001B;
         public const int InitiateCompressionPacketType = 0x7F00;
@@ -239,6 +244,50 @@ namespace AO.Client.Backends.AORebirth
                 WriteFixedAscii(body, loginKey, loginKey.Length);
                 return CreateSystemPacket(2, 1, body.ToArray());
             }
+        }
+
+        public static byte[] CreateCharacterRequest(CharacterCreationRequest request)
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+            using (var body = new MemoryStream())
+            {
+                WriteInt32(body, CreateCharacter);
+                body.Write(new byte[49], 0, 49); // Fixed-size native character creation prefix.
+                byte[] name = Encoding.ASCII.GetBytes(request.Name);
+                WriteInt32(body, name.Length);
+                body.Write(name, 0, name.Length);
+                WriteInt32(body, request.BreedId);
+                WriteInt32(body, request.GenderId);
+                WriteInt32(body, request.ProfessionId);
+                WriteInt32(body, 1); // New characters always start at level one.
+                WriteInt32(body, 0); // AreaName (empty Int32-sized string).
+                WriteInt32(body, 0); // Unknown2
+                WriteInt32(body, 0); // Unknown3
+                WriteInt32(body, request.HeadMeshId);
+                WriteInt32(body, request.MonsterScale);
+                WriteInt32(body, request.Fatness);
+                WriteInt32(body, request.StartInShadowlands ? 1 : 0);
+                return CreateSystemPacket(3, 1, body.ToArray());
+            }
+        }
+
+        public static byte[] CreateDeleteCharacter(int characterId)
+        {
+            using (var body = new MemoryStream())
+            {
+                WriteInt32(body, DeleteCharacter);
+                WriteInt32(body, characterId);
+                return CreateSystemPacket(3, 1, body.ToArray());
+            }
+        }
+
+        public static int ReadCharacterAcknowledgement(AORebirthPacket packet, int expectedType)
+        {
+            if (packet == null || packet.SystemMessageType != expectedType)
+                throw new InvalidDataException("Unexpected character operation response.");
+            int id = new BigEndianReader(packet.Body, 4).ReadInt32();
+            if (id <= 0) throw new InvalidDataException("The server returned an invalid character ID.");
+            return id;
         }
 
         public static byte[] CreateSelectCharacter(int characterId)
@@ -745,6 +794,9 @@ namespace AO.Client.Backends.AORebirth
         }
 
         public static IReadOnlyList<CharacterSummary> ReadCharacterList(AORebirthPacket packet)
+            => ReadCharacterList(packet, out _);
+
+        public static IReadOnlyList<CharacterSummary> ReadCharacterList(AORebirthPacket packet, out int allowedCharacters)
         {
             if (packet == null || packet.SystemMessageType != CharacterList)
                 throw new InvalidDataException("The packet is not an AO character list.");
@@ -790,7 +842,9 @@ namespace AO.Client.Backends.AORebirth
                     status));
             }
 
-            reader.ReadInt32(); // AllowedCharacters
+            allowedCharacters = reader.ReadInt32();
+            if (allowedCharacters < 0)
+                throw new InvalidDataException("The server returned a negative character capacity.");
             reader.ReadInt32(); // Expansions
             return characters;
         }

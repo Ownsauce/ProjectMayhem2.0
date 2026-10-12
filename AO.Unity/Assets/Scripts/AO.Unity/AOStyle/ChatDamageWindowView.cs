@@ -38,6 +38,9 @@ namespace AO.Unity.AOStyle
         private PrototypeUiContext _context;
         private RectTransform _floatingParent;
         private RectTransform _bodyHost;
+        private RectTransform _tabsRow;
+        private HorizontalLayoutGroup _tabsLayout;
+        private float _lastTabsWidth = -1f;
         private readonly Dictionary<string, TabState> _tabs = new Dictionary<string, TabState>(StringComparer.OrdinalIgnoreCase);
         private string _activeTabId = "Global";
         private int _renderedSystemHistoryVersion = -1;
@@ -73,6 +76,7 @@ namespace AO.Unity.AOStyle
 
         private void LateUpdate()
         {
+            UpdateTabLayout();
             if (_renderedSystemHistoryVersion != _systemHistoryVersion)
                 SynchronizeSystemHistory(forceFollow: false);
             else if (_tabs.TryGetValue("System", out TabState system))
@@ -126,10 +130,13 @@ namespace AO.Unity.AOStyle
             tabs.anchorMax = new Vector2(1f, 1f);
             tabs.offsetMin = new Vector2(4f, -26f);
             tabs.offsetMax = new Vector2(-4f, -4f);
+            _tabsRow = tabs;
+            tabs.gameObject.AddComponent<RectMask2D>();
             var tabsLayout = tabs.gameObject.AddComponent<HorizontalLayoutGroup>();
+            _tabsLayout = tabsLayout;
             tabsLayout.spacing = 4f;
             tabsLayout.padding = new RectOffset(2, 2, 2, 2);
-            tabsLayout.childControlWidth = false;
+            tabsLayout.childControlWidth = true;
             tabsLayout.childControlHeight = true;
             tabsLayout.childForceExpandWidth = false;
 
@@ -166,6 +173,11 @@ namespace AO.Unity.AOStyle
                 () => { _activeTabId = label; RefreshVisuals(); },
                 82f);
             state.TabLabel = state.TabButton.GetComponentInChildren<Text>();
+            state.TabLabel.fontSize = 12;
+            state.TabLabel.horizontalOverflow = HorizontalWrapMode.Overflow;
+            state.TabLabel.resizeTextForBestFit = true;
+            state.TabLabel.resizeTextMinSize = 9;
+            state.TabLabel.resizeTextMaxSize = 12;
             AddRightClick(state.TabButton, () => ToggleDetach(state));
 
             state.Panel = AOStyleUiFactory.CreatePanel("Panel_" + label, _bodyHost, new Color(0.06f, 0.09f, 0.14f, 0.98f));
@@ -297,14 +309,54 @@ namespace AO.Unity.AOStyle
                 bool active = !detached && string.Equals(tab.Id, _activeTabId, StringComparison.OrdinalIgnoreCase);
                 if (tab.Panel != null)
                     tab.Panel.gameObject.SetActive(active || detached);
-                var image = tab.TabButton != null ? tab.TabButton.GetComponent<Image>() : null;
-                if (image != null)
-                    image.color = detached
-                        ? new Color(0.3f, 0.24f, 0.12f, 0.95f)
-                        : (active ? new Color(0.26f, 0.41f, 0.58f, 0.98f) : new Color(0.2f, 0.28f, 0.4f, 0.95f));
+                if (tab.TabButton != null)
+                    AOStyleUiFactory.StyleButton(tab.TabButton, active);
                 if (tab.TabLabel != null)
-                    tab.TabLabel.text = detached ? $"{tab.Label}*" : tab.Label;
+                    tab.TabLabel.color = detached ? new Color(1f, 0.84f, 0.55f, 1f)
+                        : active ? AOStyleUiFactory.TextColor : AOStyleUiFactory.MutedText;
             }
+            UpdateTabLayout(force: true);
+        }
+
+        private float GetFullTabWidth(TabState tab)
+        {
+            string label = tab.DetachedWindow?.Root != null ? $"{tab.Label}*" : tab.Label;
+            var settings = tab.TabLabel.GetGenerationSettings(new Vector2(1000f, 30f));
+            settings.resizeTextForBestFit = false;
+            float textWidth = tab.TabLabel.cachedTextGeneratorForLayout.GetPreferredWidth(label, settings)
+                / tab.TabLabel.pixelsPerUnit;
+            return Mathf.Max(56f, Mathf.Ceil(textWidth) + 20f);
+        }
+
+        private void UpdateTabLayout(bool force = false)
+        {
+            if (_tabsRow == null || _tabsLayout == null || _tabs.Count == 0) return;
+            float width = _tabsRow.rect.width;
+            if (!force && Mathf.Abs(width - _lastTabsWidth) < 0.5f) return;
+            _lastTabsWidth = width;
+            float available = Mathf.Max(0f, width - _tabsLayout.padding.horizontal
+                - _tabsLayout.spacing * (_tabs.Count - 1));
+            float fullWidth = 0f;
+            foreach (var tab in _tabs.Values) fullWidth += GetFullTabWidth(tab);
+            bool compact = fullWidth > available;
+            float selectedWidth = 0f;
+            foreach (var tab in _tabs.Values)
+                if (tab.DetachedWindow?.Root == null && string.Equals(tab.Id, _activeTabId, StringComparison.OrdinalIgnoreCase))
+                    selectedWidth = GetFullTabWidth(tab);
+            float compactWidth = Mathf.Clamp((available - selectedWidth) / Mathf.Max(1, _tabs.Count - 1), 0f, 28f);
+            foreach (var tab in _tabs.Values)
+            {
+                bool selected = tab.DetachedWindow?.Root == null
+                    && string.Equals(tab.Id, _activeTabId, StringComparison.OrdinalIgnoreCase);
+                string fullLabel = tab.DetachedWindow?.Root != null ? $"{tab.Label}*" : tab.Label;
+                string shortLabel = tab.Id == "Tells" ? "@" : tab.Label.Substring(0, 1);
+                tab.TabLabel.text = !compact || selected ? fullLabel : shortLabel;
+                var element = tab.TabButton.GetComponent<LayoutElement>();
+                element.minWidth = 0f;
+                element.flexibleWidth = 0f;
+                element.preferredWidth = !compact || selected ? GetFullTabWidth(tab) : compactWidth;
+            }
+            LayoutRebuilder.MarkLayoutForRebuild(_tabsRow);
         }
 
         private void Seed()

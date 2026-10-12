@@ -828,6 +828,10 @@ namespace AO.Unity.World
         {
             if (!showDebugOverlay)
                 return;
+            if (_gameServerSession == null)
+                _gameServerSession = FindFirstObjectByType<AOGameServerSession>();
+            if (_gameServerSession != null)
+                return; // The active external session owns its connection diagnostics.
 
             var expandedRect = new Rect(12f, 12f, 420f, 110f);
             var collapsedRect = new Rect(12f, 12f, 36f, 24f);
@@ -838,12 +842,9 @@ namespace AO.Unity.World
                 return;
             }
 
-            if (_gameServerSession == null)
-                _gameServerSession = FindFirstObjectByType<AOGameServerSession>();
-
-            string displayName = _gameServerSession?.ServerDisplayName ?? $"{serverHost}:{serverPort}";
-            string endpoint = _gameServerSession?.ServerEndpoint ?? $"{serverHost}:{serverPort}";
-            string state = _gameServerSession?.ConnectionState ?? _connectionState;
+            string displayName = $"{serverHost}:{serverPort}";
+            string endpoint = $"{serverHost}:{serverPort}";
+            string state = _connectionState;
             GUI.Box(
                 expandedRect,
                 $"{displayName}\n" +

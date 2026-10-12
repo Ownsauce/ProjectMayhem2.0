@@ -113,6 +113,7 @@ namespace AO.Unity.World
         public IReadOnlyDictionary<string, DungeonDoorStateSnapshot> ProceduralDoorStates =>
             _proceduralDoorStates;
         public Transform ControlledPlayerTransform => _controlledPlayer;
+        public int? CharacterLimit => _backend?.CharacterLimit;
         public bool IsInVerifiedProceduralPlayfield => _worldOrigin != null
             && _worldOrigin.PlayfieldId >= 900000
             && _activeProceduralLayout != null;
@@ -279,7 +280,30 @@ namespace AO.Unity.World
                 || _backend.State == ClientConnectionState.InWorld);
 
         public string ServerDisplayName => string.IsNullOrWhiteSpace(serverName) ? serverHost : serverName;
-        public string ServerEndpoint => $"{serverHost}:{serverPort}";
+        public string ServerEndpoint => _backend?.ConnectedEndpoint ?? $"{serverHost}:{serverPort}";
+        public long PacketsSent => _backend?.PacketsSent ?? 0;
+        public long PacketsReceived => _backend?.PacketsReceived ?? 0;
+        public DateTime? LastPacketReceivedUtc => _backend?.LastPacketReceivedUtc;
+        private bool _connectionOverlayCollapsed;
+
+        private void OnGUI()
+        {
+            if (_connectionOverlayCollapsed)
+            {
+                if (GUI.Button(new Rect(12f, 12f, 36f, 24f), "▸"))
+                    _connectionOverlayCollapsed = false;
+                return;
+            }
+            var panel = new Rect(12f, 12f, 440f, 130f);
+            string lastPacket = LastPacketReceivedUtc.HasValue
+                ? $"{Math.Max(0, (DateTime.UtcNow - LastPacketReceivedUtc.Value).TotalSeconds):0.0}s ago"
+                : "none";
+            GUI.Box(panel, $"{ServerDisplayName}\nState: {ConnectionState}\nEndpoint: {ServerEndpoint}\n"
+                + $"Sent: {PacketsSent}  Received: {PacketsReceived}\n"
+                + $"Last tick: unavailable  ·  Last packet: {lastPacket}");
+            if (GUI.Button(new Rect(panel.xMax - 26f, panel.y + 4f, 20f, 18f), "▾"))
+                _connectionOverlayCollapsed = true;
+        }
         public string ConnectionState => _backend?.State.ToString() ?? ClientConnectionState.Disconnected.ToString();
 
         public string CredentialFilePath => Path.GetFullPath(Path.Combine(
@@ -539,6 +563,28 @@ namespace AO.Unity.World
                     $"Sign-in to '{ServerDisplayName}' timed out after {timeoutSeconds:0} seconds. Please try again.",
                     exception);
             }
+        }
+
+        public async Task<CharacterSummary> CreateCharacterAsync(CharacterCreationRequest request)
+        {
+            if (_backend == null || !_backend.Capabilities.HasFlag(BackendCapabilities.CharacterManagement))
+                throw new InvalidOperationException("This connection does not support character creation.");
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            try { return await _backend.CreateCharacterAsync(request, timeout.Token); }
+            catch (OperationCanceledException) when (!_lifetime.IsCancellationRequested)
+            { throw new TimeoutException("Creation timed out. Sign in again to check whether the character was created."); }
+        }
+
+        public async Task DeleteCharacterAsync(string characterId)
+        {
+            if (_backend == null || !_backend.Capabilities.HasFlag(BackendCapabilities.CharacterManagement))
+                throw new InvalidOperationException("This connection does not support character deletion.");
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            try { await _backend.DeleteCharacterAsync(characterId, timeout.Token); }
+            catch (OperationCanceledException) when (!_lifetime.IsCancellationRequested)
+            { throw new TimeoutException("Deletion timed out. Sign in again to refresh the character list."); }
         }
 
         public Task DisconnectAsync()
@@ -1407,6 +1453,12 @@ namespace AO.Unity.World
                     + $"npcData={entity.NpcUnknown}, monsterData={entity.MonsterData}, "
                     + $"monsterScale={entity.MonsterScale}, visualFlags={entity.VisualFlags}.");
             }
+
+            // Remote actors participate in the same picking path as the controlled character.
+            // Keep the authoritative snapshot rather than constructing a simulated Core character.
+            var bridge = actor.GetComponent<CharacterRuntimeBridge>()
+                ?? actor.AddComponent<CharacterRuntimeBridge>();
+            bridge.SetServerEntity(entity);
 
             if (entity.EquipmentAppearance != null)
             {

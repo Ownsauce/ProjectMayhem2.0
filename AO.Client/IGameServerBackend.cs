@@ -20,6 +20,14 @@ namespace AO.Client
 
         BackendCapabilities Capabilities { get; }
 
+        /// <summary>Account character capacity reported by the server, or null when unknown.</summary>
+        int? CharacterLimit { get; }
+
+        string ConnectedEndpoint { get; }
+        long PacketsSent { get; }
+        long PacketsReceived { get; }
+        DateTime? LastPacketReceivedUtc { get; }
+
         ClientConnectionState State { get; }
 
         event EventHandler<ConnectionStateChangedEventArgs> StateChanged;
@@ -31,6 +39,12 @@ namespace AO.Client
             CancellationToken cancellationToken = default);
 
         Task<IReadOnlyList<CharacterSummary>> GetCharactersAsync(
+            CancellationToken cancellationToken = default);
+
+        Task<CharacterSummary> CreateCharacterAsync(CharacterCreationRequest request,
+            CancellationToken cancellationToken = default);
+
+        Task DeleteCharacterAsync(string characterId,
             CancellationToken cancellationToken = default);
 
         Task<WorldEntryResult> EnterWorldAsync(

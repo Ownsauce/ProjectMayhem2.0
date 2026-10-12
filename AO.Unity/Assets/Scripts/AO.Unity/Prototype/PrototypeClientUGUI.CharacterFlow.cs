@@ -13,6 +13,7 @@ using AO.Unity.AOStyle;
 using AO.Unity.Assets;
 using AO.Unity.World;
 using AO.Assets.ResourceDatabase;
+using AO.Assets.Decoders;
 using Newtonsoft.Json;
 using UnityEngine;
 using UnityEngine.UI;
@@ -87,6 +88,10 @@ namespace AO.Unity.Prototype
         private readonly CharacterPreviewSlot[] _characterCreatePreviewSlots = new CharacterPreviewSlot[3];
         private readonly Dictionary<string, string> _defaultHeadByBreedSex = new(StringComparer.Ordinal);
         private int _carouselSelectedIndex = -1;
+        private string _activeCharacterServerScope = string.Empty;
+        private readonly Dictionary<string, int> _headMeshIds = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<int, string> _headMeshKeys = new();
+        private readonly Dictionary<int, string> _characterZoneNames = new();
         private readonly Dictionary<int, ProfessionPreviewActor> _professionPreviewActors = new();
         private readonly List<int> _professionPreviewOrder = new();
         private bool _professionStepActive;
@@ -136,7 +141,9 @@ namespace AO.Unity.Prototype
                 HandleCharacterSelectionChanged,
                 HandleProfessionPreviewSelected,
                 HandleProfessionStepVisibilityChanged,
-                HandleCharacterProfilesChanged);
+                HandleCharacterProfilesChanged,
+                HandleServerCharacterCreateRequested,
+                HandleServerCharacterDeleteRequested);
             var profiles = LoadPersistedCharacterProfiles();
             if (profiles.Count == 0)
                 profiles = CreateSeedProfiles();
@@ -178,18 +185,31 @@ namespace AO.Unity.Prototype
         private void BuildConnectionSetup(RectTransform parent, Font font)
         {
             _connectionSetupRoot = AOStyleUiFactory.CreatePanel(
-                "ConnectionSetupOverlay", parent, new Color(0.005f, 0.015f, 0.03f, 1f));
+                "ConnectionSetupOverlay", parent, new Color(0.03f, 0.06f, 0.1f, 1f));
             _connectionSetupRoot.anchorMin = Vector2.zero;
             _connectionSetupRoot.anchorMax = Vector2.one;
             _connectionSetupRoot.offsetMin = Vector2.zero;
             _connectionSetupRoot.offsetMax = Vector2.zero;
             _connectionSetupRoot.SetAsLastSibling();
+            CharacterSelectionWindowView.CreateBackgroundImage(_connectionSetupRoot);
+            var backdropShade = AOStyleUiFactory.CreatePanel("LoginBackgroundShade", _connectionSetupRoot, Color.clear);
+            backdropShade.anchorMin = Vector2.zero;
+            backdropShade.anchorMax = Vector2.one;
+            backdropShade.offsetMin = backdropShade.offsetMax = Vector2.zero;
+            backdropShade.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0.3f);
+            backdropShade.GetComponent<Image>().raycastTarget = false;
 
             RectTransform panel = AOStyleUiFactory.CreatePanel(
-                "ConnectionSetupPanel", _connectionSetupRoot, new Color(0.06f, 0.1f, 0.15f, 0.98f));
+                "ConnectionSetupPanel", _connectionSetupRoot, AOStyleUiFactory.Surface);
             panel.anchorMin = panel.anchorMax = new Vector2(0.5f, 0.5f);
             panel.pivot = new Vector2(0.5f, 0.5f);
             panel.sizeDelta = new Vector2(620f, 520f);
+            var shadow = panel.gameObject.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.45f);
+            shadow.effectDistance = new Vector2(0f, -6f);
+            var border = panel.gameObject.AddComponent<Outline>();
+            border.effectColor = new Color(0.6f, 0.8f, 0.95f, 0.35f);
+            border.effectDistance = new Vector2(1f, -1f);
 
             Text title = AOStyleUiFactory.CreateText("Title", panel,
                 "PROJECT MAYHEM", font, 28, TextAnchor.MiddleCenter);
@@ -197,7 +217,7 @@ namespace AO.Unity.Prototype
             title.color = new Color(0.65f, 0.9f, 1f, 1f);
 
             Text subtitle = AOStyleUiFactory.CreateText("Subtitle", panel,
-                "Connection Setup", font, 17, TextAnchor.MiddleCenter);
+                "SIGN IN", font, 17, TextAnchor.MiddleCenter);
             PlaceSetupControl(subtitle.rectTransform, 84f, 30f);
 
             CreateServerDropdown(panel, font, 130f);
@@ -238,13 +258,14 @@ namespace AO.Unity.Prototype
             _connectionStatusText.horizontalOverflow = HorizontalWrapMode.Wrap;
 
             _connectionContinueButton = AOStyleUiFactory.CreateButton("Continue", panel,
-                "CONNECT", font, SubmitConnectionSetup, 180f);
+                "SIGN IN", font, SubmitConnectionSetup, 180f);
             RectTransform continueRt = (RectTransform)_connectionContinueButton.transform;
             continueRt.anchorMin = continueRt.anchorMax = new Vector2(0.5f, 1f);
             continueRt.pivot = new Vector2(0.5f, 1f);
             continueRt.anchoredPosition = new Vector2(0f, -466f);
             continueRt.sizeDelta = new Vector2(180f, 36f);
 
+            AOStyleUiFactory.StyleButton(_connectionContinueButton, true);
             ConfigureConnectionSetupNavigation();
         }
 
@@ -283,10 +304,21 @@ namespace AO.Unity.Prototype
 
 #if ENABLE_INPUT_SYSTEM
             var keyboard = UnityEngine.InputSystem.Keyboard.current;
-            if (keyboard == null || !keyboard.tabKey.wasPressedThisFrame)
+            if (keyboard == null)
                 return;
+            if (keyboard.enterKey.wasPressedThisFrame || keyboard.numpadEnterKey.wasPressedThisFrame)
+            {
+                SubmitConnectionSetup();
+                return;
+            }
+            if (!keyboard.tabKey.wasPressedThisFrame) return;
             bool backwards = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
 #else
+            if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+            {
+                SubmitConnectionSetup();
+                return;
+            }
             if (!Input.GetKeyDown(KeyCode.Tab))
                 return;
             bool backwards = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
@@ -343,10 +375,8 @@ namespace AO.Unity.Prototype
                 "Server", font, 13, TextAnchor.MiddleLeft);
             PlaceSetupControl(label.rectTransform, top, 20f);
 
-            GameObject dropdownObject = DefaultControls.CreateDropdown(new DefaultControls.Resources());
-            dropdownObject.name = "ServerDropdown";
-            dropdownObject.transform.SetParent(panel, false);
-            _connectionServerDropdown = dropdownObject.GetComponent<Dropdown>();
+            _connectionServerDropdown = AOStyleUiFactory.CreateDropdown("ServerDropdown", panel, font, 540f);
+            GameObject dropdownObject = _connectionServerDropdown.gameObject;
             RectTransform dropdownRt = (RectTransform)dropdownObject.transform;
             dropdownRt.anchorMin = dropdownRt.anchorMax = new Vector2(0.5f, 1f);
             dropdownRt.pivot = new Vector2(0.5f, 1f);
@@ -529,6 +559,11 @@ namespace AO.Unity.Prototype
             }
             _gameServerSession.ConfigureConnection(server.displayName, server.host, server.port,
                 server.version, server.authentication, server.loginPrime, server.loginPublicSeed);
+            _activeCharacterServerScope = $"{server.host}:{server.port}|{username.ToLowerInvariant()}";
+            _characterZoneNames.Clear();
+            _headMeshIds.Clear();
+            _headMeshKeys.Clear();
+            _defaultHeadByBreedSex.Clear();
             _connectionContinueButton.interactable = false;
             SetConnectionSetupStatus("Connecting and authenticating...", true);
             LoadServerCharactersAsync(username, password);
@@ -562,6 +597,8 @@ namespace AO.Unity.Prototype
                     new CharacterSelectionWindowView.CharacterProfile
                     {
                         ServerCharacterId = character.Id,
+                        ServerScope = _activeCharacterServerScope,
+                        AreaName = ResolveCharacterZoneName(character.PlayfieldId, character.AreaName),
                         Name = character.Name,
                         Level = Mathf.Max(1, character.Level),
                         BreedId = character.BreedId <= 0 ? 1 : character.BreedId,
@@ -576,12 +613,14 @@ namespace AO.Unity.Prototype
                         StartPlayfieldId = character.PlayfieldId
                     }).ToList();
                 var savedProfiles = LoadPersistedCharacterProfiles()
-                    .Where(profile => profile != null && !string.IsNullOrWhiteSpace(profile.Name))
+                    .Where(profile => profile != null && !string.IsNullOrWhiteSpace(profile.Name)
+                        && profile.ServerScope == _activeCharacterServerScope)
                     .GroupBy(profile => profile.Name.Trim(), StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
                 foreach (var profile in profiles)
                 {
                     if (!savedProfiles.TryGetValue(profile.Name?.Trim() ?? string.Empty, out var saved)
+                        || saved.ServerCharacterId != profile.ServerCharacterId
                         || saved.BreedId != profile.BreedId
                         || saved.Sex != profile.Sex)
                         continue;
@@ -591,6 +630,7 @@ namespace AO.Unity.Prototype
                     profile.CachedAppearanceValue = saved.CachedAppearanceValue;
                     profile.CachedVisualFlags = saved.CachedVisualFlags;
                     profile.CachedHeadMeshId = saved.CachedHeadMeshId;
+                    profile.CachedMonsterScale = saved.CachedMonsterScale;
                     profile.CachedAppearanceTextures = saved.CachedAppearanceTextures?.ToList() ?? new List<AppearanceTexture>();
                     profile.CachedAppearanceMeshes = saved.CachedAppearanceMeshes?.ToList() ?? new List<AppearanceMesh>();
                 }
@@ -599,6 +639,8 @@ namespace AO.Unity.Prototype
                 // An empty character list is still a complete server response. Always
                 // replace the view's profiles so characters from the previous account
                 // cannot remain visible after switching servers or accounts.
+                _characterSelectionView?.SetCharacterCapacity(
+                    _gameServerSession.CharacterLimit, _gameServerSession.ServerDisplayName);
                 _characterSelectionView?.SetProfiles(profiles);
                 if (_connectionSetupRoot != null)
                     _connectionSetupRoot.gameObject.SetActive(false);
@@ -609,7 +651,7 @@ namespace AO.Unity.Prototype
                 }
                 if (profiles.Count > 0)
                 {
-                    HandleCharacterSelectionChanged(0);
+                    HandleCharacterSelectionChanged(_characterSelectionView?.SelectedProfileIndex ?? 0);
                 }
                 else
                 {
@@ -617,7 +659,7 @@ namespace AO.Unity.Prototype
                     HandleCharacterSelectionChanged(-1);
                 }
                 _characterSelectionView?.SetConnectionStatus(
-                    $"Authenticated — {profiles.Count} server character(s) received.");
+                    profiles.Count > 0 ? "Choose a character, then select Play." : "Create a character to begin.");
                 if (_connectionSetupRoot != null)
                     _connectionSetupRoot.gameObject.SetActive(false);
                 if (_characterSelectionRoot != null)
@@ -636,12 +678,69 @@ namespace AO.Unity.Prototype
             }
         }
 
+        private string ResolveCharacterZoneName(int playfieldId, string serverAreaName)
+        {
+            if (!string.IsNullOrWhiteSpace(serverAreaName)
+                && !string.Equals(serverAreaName, "area unknown", StringComparison.OrdinalIgnoreCase))
+                return serverAreaName;
+            if (playfieldId <= 0) return string.Empty;
+            if (_characterZoneNames.TryGetValue(playfieldId, out string cached)) return cached;
+            string name = string.Empty;
+            try
+            {
+                AOInstallValidation install = AOInstallConfiguration.GetConfiguredInstall();
+                if (install != null && install.IsValid)
+                {
+                    using var database = new AOResourceDatabase(install.RootPath);
+                    if (database.TryReadRaw(AOResourceTypes.Playfield, playfieldId, out byte[] raw))
+                        name = AOPlayfieldDefinitionDecoder.Decode(raw, playfieldId).Name ?? string.Empty;
+                }
+            }
+            catch (Exception exception) { Debug.LogWarning($"Could not resolve zone {playfieldId}: {exception.Message}"); }
+            _characterZoneNames[playfieldId] = name;
+            return name;
+        }
+
+        private async Task<CharacterSelectionWindowView.CharacterProfile> HandleServerCharacterCreateRequested(
+            CharacterSelectionWindowView.CharacterProfile profile)
+        {
+            if (_gameServerSession == null || !_gameServerSession.IsAuthenticated)
+                throw new InvalidOperationException("Sign in before creating a character.");
+            EnsureProfileHasHead(profile);
+            ProvideHeadLookupForDraft(profile.BreedId, profile.Sex);
+            if (!_headMeshIds.TryGetValue(profile.HeadMeshKey ?? string.Empty, out int headId))
+                throw new InvalidOperationException("The selected head could not be found in your AO installation. Choose another head.");
+            int gender = profile.BreedId == 4 ? 1
+                : profile.Sex == CharacterRuntimeBridge.CharacterSex.Female ? 3 : 2;
+            int scale = profile.Height == CharacterSelectionWindowView.BodyHeightPreset.Short ? 92
+                : profile.Height == CharacterSelectionWindowView.BodyHeightPreset.Tall ? 108 : 100;
+            var request = new CharacterCreationRequest(profile.Name, profile.BreedId, gender,
+                profile.ProfessionId, headId, scale, (int)profile.Weight,
+                startInShadowlands: profile.ProfessionId == 14 || profile.ProfessionId == 15);
+            CharacterSummary created = await _gameServerSession.CreateCharacterAsync(request);
+            profile.ServerCharacterId = created.Id;
+            profile.ServerScope = _activeCharacterServerScope;
+            profile.Name = created.Name;
+            profile.CachedHeadMeshId = headId;
+            profile.CachedMonsterScale = scale;
+            profile.StartPlayfieldId = created.PlayfieldId;
+            profile.AreaName = created.AreaName;
+            return profile;
+        }
+
+        private async Task HandleServerCharacterDeleteRequested(CharacterSelectionWindowView.CharacterProfile profile)
+        {
+            if (_gameServerSession == null || string.IsNullOrWhiteSpace(profile?.ServerCharacterId))
+                throw new InvalidOperationException("Select a character from the signed-in account.");
+            await _gameServerSession.DeleteCharacterAsync(profile.ServerCharacterId);
+        }
+
         private string ResolveServerProfessionName(int professionId)
         {
             IReadOnlyDictionary<int, string> lookup = _context?.GetProfessionLookup();
             return lookup != null && lookup.TryGetValue(professionId, out string name)
                 ? name
-                : $"Profession {professionId}";
+                : CharacterSelectionWindowView.GetProfessionName(professionId);
         }
 
         private static CharacterRuntimeBridge.CharacterSex ResolveServerCharacterSex(int breedId, int genderId)
@@ -705,6 +804,8 @@ namespace AO.Unity.Prototype
 
                 loaded.Add(new CharacterSelectionWindowView.CharacterProfile
                 {
+                    ServerCharacterId = entry.ServerCharacterId,
+                    ServerScope = entry.ServerScope,
                     Name = entry.Name.Trim(),
                     Level = Mathf.Max(1, entry.Level),
                     BreedId = entry.BreedId <= 0 ? 1 : entry.BreedId,
@@ -726,6 +827,7 @@ namespace AO.Unity.Prototype
                     CachedAppearanceValue = entry.CachedAppearanceValue,
                     CachedVisualFlags = entry.CachedVisualFlags,
                     CachedHeadMeshId = entry.CachedHeadMeshId,
+                    CachedMonsterScale = entry.CachedMonsterScale,
                     CachedAppearanceTextures = entry.CachedAppearanceTextures?.ToList() ?? new List<AppearanceTexture>(),
                     CachedAppearanceMeshes = entry.CachedAppearanceMeshes?.ToList() ?? new List<AppearanceMesh>(),
                     StartPlayfieldId = entry.StartPlayfieldId <= 0 ? 4604 : entry.StartPlayfieldId
@@ -797,6 +899,7 @@ namespace AO.Unity.Prototype
                 CacheSelectedServerAppearance(profile, zone.Entities);
                 Debug.Log($"[WorldEntry] Zone bootstrap received: PF {zone.Bootstrap.PlayfieldId}.");
                 profile.StartPlayfieldId = zone.Bootstrap.PlayfieldId;
+                profile.AreaName = ResolveCharacterZoneName(profile.StartPlayfieldId, string.Empty);
                 if (_selfBridge != null)
                     _selfBridge.transform.position = Vector3.zero;
                 bool validBootstrapPosition = float.IsFinite(zone.Bootstrap.X)
@@ -822,6 +925,8 @@ namespace AO.Unity.Prototype
                                 : null,
                             explicitYaw: null,
                             preferTeleportDefault: false));
+                bootstrap?.SetLoadingMessage(string.IsNullOrWhiteSpace(profile.AreaName)
+                    ? "Preparing world…" : $"Loading {profile.AreaName}…");
                 if (loadedPlayfield)
                 {
                     // GLB playfields defer the authoritative spawn until all renderers and
@@ -1011,7 +1116,10 @@ namespace AO.Unity.Prototype
                 character.SetLevelAndRebuildIp(Mathf.Max(1, profile.Level), preserveSpent: false);
             }
 
-            _selfBridge.transform.localScale = ComputeCharacterScale(profile.Height, profile.Weight);
+            _selfBridge.transform.localScale = !string.IsNullOrWhiteSpace(profile.ServerCharacterId)
+                ? (profile.CachedMonsterScale > 0 ? Vector3.one * (profile.CachedMonsterScale / 100f)
+                    : ComputeCharacterScale(profile.Height, CharacterSelectionWindowView.BodyWeightPreset.Medium))
+                : ComputeCharacterScale(profile.Height, profile.Weight);
             var selfAppearance = _selfBridge.GetComponent<CharacterAppearanceController>();
             if (selfAppearance != null)
                 selfAppearance.ReloadHeadPreviewOffsets();
@@ -1239,6 +1347,8 @@ namespace AO.Unity.Prototype
                             if (string.IsNullOrWhiteSpace(databasePrefix)
                                 || !meshKey.StartsWith(databasePrefix, StringComparison.OrdinalIgnoreCase))
                                 continue;
+                            _headMeshIds[meshKey] = pair.Key;
+                            _headMeshKeys[pair.Key] = meshKey;
                             if (!result.ContainsKey(meshKey))
                                 result[meshKey] = meshKey;
                         }
@@ -1275,6 +1385,7 @@ namespace AO.Unity.Prototype
             }
 
             _characterCreatePreviewBridge.Sex = sex;
+            _characterCreatePreviewAppearance?.ClearTemporaryMeshResourceOverride();
             // Always switch to the first valid head for this breed/sex so preview never
             // keeps a mismatched head from a previous selection.
             string defaultHeadMeshKey = string.Empty;
@@ -1302,7 +1413,12 @@ namespace AO.Unity.Prototype
         {
             if (_characterCreatePreviewBridge == null)
                 return;
-            _characterCreatePreviewBridge.transform.localScale = ComputeCharacterScale(height, weight);
+            uint appearance = ((uint)weight << 3) | ((uint)(_characterCreatePreviewBridge.Character?.BreedId ?? 1) << 5)
+                | ((uint)(_characterCreatePreviewBridge.Sex == CharacterRuntimeBridge.CharacterSex.Uni ? 1
+                    : _characterCreatePreviewBridge.Sex == CharacterRuntimeBridge.CharacterSex.Female ? 3 : 2) << 8);
+            _characterCreatePreviewAppearance?.SetTemporaryMeshResourceOverride(ServerAppearanceVisualController.BodyMeshName(appearance));
+            _characterCreatePreviewBridge.transform.localScale = ComputeCharacterScale(
+                height, CharacterSelectionWindowView.BodyWeightPreset.Medium);
             _characterCreatePreviewAppearance?.PrewarmCurrentVisual();
             UpdateCharacterCreatePreviewCameraFraming();
         }
@@ -1318,7 +1434,7 @@ namespace AO.Unity.Prototype
         private void SetupCharacterCreatePreview()
         {
             CleanupCharacterCreatePreview();
-            _characterCreatePreviewOrbitYaw = 165f;
+            _characterCreatePreviewOrbitYaw = 180f;
 
             var previewRoot = new GameObject("CharacterCreatePreviewRoot");
             previewRoot.transform.position = new Vector3(5000f, -500f, 5000f);
@@ -1457,7 +1573,7 @@ namespace AO.Unity.Prototype
                 var profile = profiles[profileIndex];
                 EnsureProfileHasHead(profile);
                 string profileSignature = $"{profile.Name}|{profile.BreedId}|{(int)profile.Sex}|"
-                    + $"{(int)profile.Height}|{(int)profile.Weight}|{profile.HeadMeshKey}";
+                    + $"{(int)profile.Height}|{(int)profile.Weight}|{profile.HeadMeshKey}|{profile.CachedAppearanceValue}|{profile.CachedMonsterScale}";
                 bool actorAlreadyMatches = string.Equals(
                     slot.AppliedProfileSignature, profileSignature, StringComparison.Ordinal);
                 if (!actorAlreadyMatches)
@@ -1474,8 +1590,18 @@ namespace AO.Unity.Prototype
 
         private void EnsureProfileHasHead(CharacterSelectionWindowView.CharacterProfile profile)
         {
-            if (profile == null || !string.IsNullOrWhiteSpace(profile.HeadMeshKey))
-                return;
+            if (profile == null) return;
+            if (profile.CachedHeadMeshId > 0)
+            {
+                if (!_headMeshKeys.ContainsKey(profile.CachedHeadMeshId))
+                    ProvideHeadLookupForDraft(profile.BreedId, profile.Sex);
+                if (_headMeshKeys.TryGetValue(profile.CachedHeadMeshId, out string serverHead))
+                {
+                    profile.HeadMeshKey = serverHead;
+                    return;
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(profile.HeadMeshKey)) return;
             string cacheKey = $"{profile.BreedId}:{(int)profile.Sex}";
             if (!_defaultHeadByBreedSex.TryGetValue(cacheKey, out string headKey))
             {
@@ -1483,7 +1609,7 @@ namespace AO.Unity.Prototype
                 IReadOnlyDictionary<string, string> heads = ProvideHeadLookupForDraft(profile.BreedId, profile.Sex);
                 if (heads != null)
                 {
-                    foreach (string candidate in heads.Keys)
+                    foreach (string candidate in heads.Keys.OrderBy(key => key, StringComparer.OrdinalIgnoreCase))
                     {
                         if (!string.IsNullOrWhiteSpace(candidate))
                         {
@@ -1515,7 +1641,13 @@ namespace AO.Unity.Prototype
             slot.Bridge.Sex = profile.Sex;
             slot.Bridge.DebugHeadMeshKey = profile.HeadMeshKey ?? string.Empty;
             slot.Bridge.DisplayNameOverride = profile.Name ?? string.Empty;
-            slot.BaseScale = ComputeCharacterScale(profile.Height, profile.Weight);
+            // The native body mesh already carries fatness; scale height uniformly.
+            slot.BaseScale = profile.CachedMonsterScale > 0 ? Vector3.one * (profile.CachedMonsterScale / 100f)
+                : ComputeCharacterScale(profile.Height, CharacterSelectionWindowView.BodyWeightPreset.Medium);
+            uint bodyAppearance = profile.CachedAppearanceValue != 0 ? profile.CachedAppearanceValue
+                : ((uint)profile.Weight << 3) | ((uint)profile.BreedId << 5)
+                    | ((uint)(profile.BreedId == 4 ? 1 : profile.Sex == CharacterRuntimeBridge.CharacterSex.Female ? 3 : 2) << 8);
+            slot.Appearance?.SetTemporaryMeshResourceOverride(ServerAppearanceVisualController.BodyMeshName(bodyAppearance));
             int visualRevision = ++slot.VisualRevision;
             if (slot.NameLabel != null)
                 slot.NameLabel.text = profile.Name ?? string.Empty;
@@ -1535,7 +1667,7 @@ namespace AO.Unity.Prototype
             }
         }
 
-        private static void CacheSelectedServerAppearance(
+        private void CacheSelectedServerAppearance(
             CharacterSelectionWindowView.CharacterProfile profile,
             IReadOnlyList<NearbyEntity> entities)
         {
@@ -1547,7 +1679,11 @@ namespace AO.Unity.Prototype
             if (selected == null) return;
             profile.CachedAppearanceValue = selected.Appearance;
             profile.CachedVisualFlags = selected.EquipmentAppearance.VisualFlags;
-            profile.CachedHeadMeshId = selected.EquipmentAppearance.HeadMeshId ?? 0;
+            if (selected.EquipmentAppearance.HeadMeshId.GetValueOrDefault() > 0)
+                profile.CachedHeadMeshId = selected.EquipmentAppearance.HeadMeshId.Value;
+            else if (_gameServerSession?.CurrentCharacterState?.Stats != null
+                && _gameServerSession.CurrentCharacterState.Stats.TryGetValue(64, out int headId) && headId > 0)
+                profile.CachedHeadMeshId = headId;
             profile.CachedAppearanceTextures = selected.EquipmentAppearance.Textures.ToList();
             profile.CachedAppearanceMeshes = selected.EquipmentAppearance.Meshes.ToList();
             int breed = (int)((selected.Appearance >> 5) & 7);
@@ -1559,6 +1695,15 @@ namespace AO.Unity.Prototype
                     : gender == 3 ? CharacterRuntimeBridge.CharacterSex.Female
                     : CharacterRuntimeBridge.CharacterSex.Male;
                 profile.BreedLabel = ResolveBreedLabel(profile.BreedId, (int)profile.Sex);
+            }
+            EnsureProfileHasHead(profile);
+            var stats = _gameServerSession?.CurrentCharacterState?.Stats;
+            if (stats != null && stats.TryGetValue(360, out int scale) && scale > 0)
+            {
+                profile.CachedMonsterScale = scale;
+                profile.Height = scale < 96 ? CharacterSelectionWindowView.BodyHeightPreset.Short
+                    : scale > 104 ? CharacterSelectionWindowView.BodyHeightPreset.Tall
+                    : CharacterSelectionWindowView.BodyHeightPreset.Medium;
             }
             int fatness = (int)((selected.Appearance >> 3) & 3);
             if (fatness >= 0 && fatness <= 2)
@@ -1624,8 +1769,7 @@ namespace AO.Unity.Prototype
 
             // Match the profession carousel style: selected in front, neighbors curved back.
             // Slots are ordered: 0=left neighbor, 1=selected, 2=right neighbor.
-            const float radius = 2.2f;
-            const float zCenter = 1.45f;
+            const float radius = 2.5f;
             const float stepDeg = 42f;
             int[] relative = { -1, 0, 1 };
 
@@ -1639,7 +1783,7 @@ namespace AO.Unity.Prototype
                 float angleDeg = rel * stepDeg;
                 float rad = angleDeg * Mathf.Deg2Rad;
                 float x = Mathf.Sin(rad) * radius;
-                float z = zCenter + Mathf.Cos(rad) * radius;
+                float z = (Mathf.Cos(rad) - 1f) * radius;
                 slot.TargetLocalPosition = new Vector3(x, 0f, z);
 
                 // Face camera on yaw only so characters are always readable.
@@ -1655,7 +1799,7 @@ namespace AO.Unity.Prototype
                 }
 
                 // Keep selected character emphasized.
-                float emphasis = rel == 0 ? 1.08f : 0.82f;
+                float emphasis = rel == 0 ? 1f : 0.85f;
                 slot.TargetLocalScale = slot.BaseScale * emphasis;
                 if (immediate)
                 {
@@ -1665,7 +1809,7 @@ namespace AO.Unity.Prototype
                 }
                 if (slot.NameLabel != null)
                 {
-                    slot.NameLabel.gameObject.SetActive(rel == 0);
+                    slot.NameLabel.gameObject.SetActive(false);
                     slot.NameLabel.transform.localPosition = rel == 0 ? new Vector3(0f, 1.20f, 0f) : new Vector3(0f, 2.2f, 0f);
                 }
             }
@@ -1688,8 +1832,7 @@ namespace AO.Unity.Prototype
                 slot.Transform.localScale = Vector3.Lerp(
                     slot.Transform.localScale, slot.TargetLocalScale, blend);
             }
-            // The selected actor itself moves from a neighboring carousel slot. Keep
-            // the camera framed on it during that interpolation instead of its old slot.
+            // Hold the camera on the stage while the actors slide into place.
             UpdateCharacterCreatePreviewCameraFraming();
         }
 
@@ -1699,10 +1842,17 @@ namespace AO.Unity.Prototype
             if (!inCreateFlow)
             {
                 SetProfessionActorsVisible(false);
-                HandleCharacterSelectionChanged(0);
+                _characterCreatePreviewOrbitYaw = 180f;
                 return;
             }
 
+            if (_characterCreatePreviewSlots[1] != null)
+            {
+                // Editing the draft reuses this actor; force restoration on return to selection.
+                _characterCreatePreviewSlots[1].AppliedProfileSignature = string.Empty;
+                _characterCreatePreviewSlots[1].Transform.localPosition = Vector3.zero;
+                _characterCreatePreviewSlots[1].Transform.localRotation = Quaternion.identity;
+            }
             if (_characterCreatePreviewAppearance != null)
                 _characterCreatePreviewAppearance.PrewarmCurrentVisual();
             if (_characterSelectionView != null && _characterCreatePreviewTexture != null)
@@ -1747,7 +1897,7 @@ namespace AO.Unity.Prototype
                 }
                 else
                 {
-                    HandleCharacterSelectionChanged(0);
+                    HandleCharacterSelectionChanged(_characterSelectionView?.SelectedProfileIndex ?? 0);
                 }
             }
 
@@ -1836,7 +1986,9 @@ namespace AO.Unity.Prototype
             {
                 if (_characterCreatePreviewBridge == null)
                     return;
-                rootPos = _characterCreatePreviewBridge.transform.position;
+                rootPos = !_createFlowUiActive && _characterCreatePreviewRoot != null
+                    ? _characterCreatePreviewRoot.transform.position
+                    : _characterCreatePreviewBridge.transform.position;
                 lookTarget = rootPos + Vector3.up * 0.90f;
             }
 
@@ -2110,6 +2262,16 @@ namespace AO.Unity.Prototype
         private void SetCharacterFlowActive(bool active)
         {
             _characterFlowActive = active;
+            if (_uiBodyRoot != null)
+                _uiBodyRoot.gameObject.SetActive(!active);
+            if (active)
+            {
+                if (_targetMarkerRoot != null) _targetMarkerRoot.gameObject.SetActive(false);
+                if (_topTargetBarRoot != null) _topTargetBarRoot.gameObject.SetActive(false);
+                SetNanoCastBarVisible(false);
+                if (_corpseLootHoverText != null) _corpseLootHoverText.gameObject.SetActive(false);
+                if (_corpseLootHoverIcon != null) _corpseLootHoverIcon.gameObject.SetActive(false);
+            }
             if (active)
                 UpdateCharacterCreatePreviewCameraFraming();
             else

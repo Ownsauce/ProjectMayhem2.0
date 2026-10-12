@@ -49,6 +49,8 @@ namespace AO.Unity.Prototype
                 previousByName.TryGetValue(profile.Name.Trim(), out previous);
 
                 bool reusePreviousSpawnState = previous != null
+                    && previous.ServerCharacterId == profile.ServerCharacterId
+                    && previous.ServerScope == profile.ServerScope
                     && previous.BreedId == profile.BreedId
                     && previous.Sex == (int)profile.Sex
                     && previous.ProfessionId == profile.ProfessionId
@@ -56,6 +58,8 @@ namespace AO.Unity.Prototype
 
                 _clientPrefs.Characters.Add(new PersistedCharacterProfile
                 {
+                    ServerCharacterId = profile.ServerCharacterId,
+                    ServerScope = profile.ServerScope,
                     Name = profile.Name.Trim(),
                     Level = Mathf.Max(1, profile.Level),
                     BreedId = profile.BreedId,
@@ -69,6 +73,7 @@ namespace AO.Unity.Prototype
                     CachedAppearanceValue = profile.CachedAppearanceValue,
                     CachedVisualFlags = profile.CachedVisualFlags,
                     CachedHeadMeshId = profile.CachedHeadMeshId,
+                    CachedMonsterScale = profile.CachedMonsterScale,
                     CachedAppearanceTextures = profile.CachedAppearanceTextures?.ToList() ?? new List<AppearanceTexture>(),
                     CachedAppearanceMeshes = profile.CachedAppearanceMeshes?.ToList() ?? new List<AppearanceMesh>(),
                     // Keep runtime-updated playfield as source of truth; selection profile can be stale.

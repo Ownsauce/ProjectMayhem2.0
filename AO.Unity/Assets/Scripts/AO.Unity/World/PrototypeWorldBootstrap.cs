@@ -226,21 +226,7 @@ namespace AO.Unity.World
         [Header("Launch Logo Overlay")]
         [SerializeField] private bool showLaunchLogoOnStartup = true;
         [SerializeField] private string playfieldLoadingLogoResourcePath = "Logo/project_mayhem_logo.svg";
-        [SerializeField] private Color playfieldLoadingOverlayColor = new Color(0f, 0f, 0f, 0.82f);
         [SerializeField] private Color playfieldLoadingLogoTint = Color.white;
-        [SerializeField] private Vector2 playfieldLoadingLogoSize = new Vector2(420f, 420f);
-        [SerializeField] private bool playfieldLoadingLogoFillScreen = true;
-        [SerializeField, Range(0.05f, 0.95f)] private float playfieldLoadingLogoLetterHighlightWidthNormalized = 0.28f;
-        [SerializeField, Range(0.05f, 0.95f)] private float playfieldLoadingLogoLetterHighlightHeightNormalized = 0.34f;
-        [SerializeField, Range(0.05f, 0.95f)] private float playfieldLoadingLogoPPositionNormalized = 0.40f;
-        [SerializeField, Range(0.05f, 0.95f)] private float playfieldLoadingLogoMPositionNormalized = 0.57f;
-        [SerializeField, Range(0.05f, 0.95f)] private float playfieldLoadingLogoLetterYPositionNormalized = 0.56f;
-        [SerializeField] private float playfieldLoadingLogoLetterHighlightDurationSeconds = 0.55f;
-        [SerializeField] private float playfieldLoadingLogoSweepPauseSeconds = 0.10f;
-        [SerializeField] private Color playfieldLoadingLogoPSweepTint = new Color(0.22f, 0.92f, 1f, 0.88f);
-        [SerializeField] private Color playfieldLoadingLogoMSweepTint = new Color(0.93f, 0.35f, 1f, 0.88f);
-        [SerializeField, Range(0f, 0.35f)] private float playfieldLoadingLogoPulseAmount = 0.12f;
-        [SerializeField] private float playfieldLoadingLogoPulseDurationSeconds = 1.1f;
         [SerializeField] private float launchLogoDurationSeconds = 6f;
         [SerializeField] private bool pauseGameplayDuringLaunchLogo = true;
 
@@ -294,14 +280,9 @@ namespace AO.Unity.World
         private float _activeCoordinateScale = 1f;
         private GameObject _playfieldLoadingOverlayRoot;
         private Image _playfieldLoadingOverlayLogo;
-        private RectTransform _playfieldLoadingOverlayLogoRect;
-        private RectTransform _playfieldLoadingOverlayLogoPHighlightMaskRect;
-        private RectTransform _playfieldLoadingOverlayLogoMHighlightMaskRect;
-        private RectTransform _playfieldLoadingOverlayLogoPHighlightRect;
-        private RectTransform _playfieldLoadingOverlayLogoMHighlightRect;
-        private Image _playfieldLoadingOverlayLogoPHighlightImage;
-        private Image _playfieldLoadingOverlayLogoMHighlightImage;
-        private Coroutine _playfieldLoadingOverlayLogoSweepCoroutine;
+        private RectTransform _loadingIndicator;
+        private Text _loadingStatusText;
+        private Coroutine _loadingIndicatorCoroutine;
         private Coroutine _playfieldLoadingOverlayHideCoroutine;
         private float _playfieldLoadingOverlayShownAt = -1f;
         private bool _externalWorldEntryLoadingHold;

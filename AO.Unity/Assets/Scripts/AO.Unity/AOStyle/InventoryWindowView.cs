@@ -18,6 +18,8 @@ namespace AO.Unity.AOStyle
         private RectTransform _grid;
         private GridLayoutGroup _gridLayout;
         private bool _refreshQueued;
+        private CanvasGroup _scrollbarVisibility;
+        private Scrollbar _scrollbar;
 
         public void Initialize(PrototypeUiContext context, Font font, Canvas canvas)
         {
@@ -43,6 +45,23 @@ namespace AO.Unity.AOStyle
 
         private void LateUpdate()
         {
+            if (_scrollbarVisibility != null)
+            {
+#if ENABLE_INPUT_SYSTEM
+                var mouse = UnityEngine.InputSystem.Mouse.current;
+                Vector2 pointer = mouse != null ? mouse.position.ReadValue() : new Vector2(-10000f, -10000f);
+#else
+                Vector2 pointer = Input.mousePosition;
+#endif
+                var window = transform.parent as RectTransform;
+                bool hovered = window != null && RectTransformUtility.RectangleContainsScreenPoint(
+                    window, pointer, _canvas != null && _canvas.renderMode != RenderMode.ScreenSpaceOverlay ? _canvas.worldCamera : null);
+                bool visible = hovered && _scrollbar != null && _scrollbar.size < 0.999f;
+                _scrollbarVisibility.alpha = Mathf.MoveTowards(_scrollbarVisibility.alpha,
+                    visible ? 1f : 0f, Time.unscaledDeltaTime * 8f);
+                _scrollbarVisibility.blocksRaycasts = visible;
+                _scrollbarVisibility.interactable = visible;
+            }
             if (!_refreshQueued)
                 return;
 
@@ -64,7 +83,7 @@ namespace AO.Unity.AOStyle
             scrollRt.anchorMin = Vector2.zero;
             scrollRt.anchorMax = Vector2.one;
             scrollRt.offsetMin = new Vector2(6f, 6f);
-            scrollRt.offsetMax = new Vector2(-22f, -6f);
+            scrollRt.offsetMax = new Vector2(-18f, -6f);
             var scroll = scrollGo.GetComponent<ScrollRect>();
             scroll.horizontal = false;
             scroll.vertical = true;
@@ -115,7 +134,7 @@ namespace AO.Unity.AOStyle
             barRt.pivot = new Vector2(1f, 1f);
             barRt.offsetMin = new Vector2(-14f, 6f);
             barRt.offsetMax = new Vector2(-6f, -6f);
-            barGo.GetComponent<Image>().color = new Color(0.14f, 0.18f, 0.24f, 1f);
+            barGo.GetComponent<Image>().color = AOStyleUiFactory.Surface;
 
             var handleArea = new GameObject("SlidingArea", typeof(RectTransform));
             handleArea.transform.SetParent(barGo.transform, false);
@@ -132,14 +151,19 @@ namespace AO.Unity.AOStyle
             handleRt.anchorMax = Vector2.one;
             handleRt.offsetMin = Vector2.zero;
             handleRt.offsetMax = Vector2.zero;
-            handleGo.GetComponent<Image>().color = new Color(0.35f, 0.45f, 0.62f, 1f);
+            handleGo.GetComponent<Image>().color = new Color(0.55f, 0.75f, 0.90f, 1f);
 
             var scrollbar = barGo.GetComponent<Scrollbar>();
             scrollbar.direction = Scrollbar.Direction.BottomToTop;
             scrollbar.handleRect = handleRt;
             scrollbar.targetGraphic = handleGo.GetComponent<Image>();
             scroll.verticalScrollbar = scrollbar;
-            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHideAndExpandViewport;
+            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            _scrollbar = scrollbar;
+            _scrollbarVisibility = barGo.AddComponent<CanvasGroup>();
+            _scrollbarVisibility.alpha = 0f;
+            _scrollbarVisibility.blocksRaycasts = false;
+            _scrollbarVisibility.interactable = false;
         }
 
         private int ComputeColumnCount()
