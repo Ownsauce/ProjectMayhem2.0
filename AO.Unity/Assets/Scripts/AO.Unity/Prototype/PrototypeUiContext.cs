@@ -1675,6 +1675,15 @@ namespace AO.Unity.Prototype
             catch (Exception exception) { SetStatus($"Cast failed: {exception.Message}"); }
         }
 
+        public void ApplyServerNanoCast(NanoCastUpdate cast)
+        {
+            var program = BuildUploadedProgram(cast.NanoId, null, null);
+            string name = program.Name;
+            SetStatus(cast.Kind == NanoCastUpdateKind.Started ? $"Casting {name}."
+                : cast.Kind == NanoCastUpdateKind.Interrupted ? $"Casting {name} interrupted."
+                : cast.Result == 1 ? $"Executed {name}." : $"Casting {name} failed.");
+        }
+
         public void ApplyServerNanoEffect(NanoEffectUpdate effect)
         {
             if (effect == null) return;
@@ -1692,6 +1701,15 @@ namespace AO.Unity.Prototype
                     NcuCost = GetProgramNcuCost(effect.NanoId), StartedAt = Time.unscaledTime,
                     DurationSeconds = effect.DurationCentiseconds / 100f });
             }
+            NotifyStateChanged();
+        }
+
+        public void RestoreServerNanoEffects(IReadOnlyList<NanoEffectUpdate> effects)
+        {
+            _activePrograms.Clear();
+            _nativeNanoCancelsPending.Clear();
+            ++_nativeNanoCancelEpoch;
+            foreach (var effect in effects) ApplyServerNanoEffect(effect);
             NotifyStateChanged();
         }
 
@@ -2559,9 +2577,20 @@ namespace AO.Unity.Prototype
         private int _nativeAttackTargetType;
         private int _nativeAttackTargetInstance;
 
+        public void StopNativeAttackForTarget(int type, int instance)
+        {
+            if (_nativeAttackTargetType != type || _nativeAttackTargetInstance != instance) return;
+            _nativeAttackTargetType = 0;
+            _nativeAttackTargetInstance = 0;
+            _runtimeBridge?.GetComponent<CharacterAppearanceController>()?.SetServerAttackActive(false);
+            SendNativeAttack(0, 0);
+        }
+
         public void ApplyServerAttackState(CombatUpdate combat)
         {
             bool active = combat.Kind == CombatUpdateKind.Started;
+            if (!active && combat.TargetInstance > 0 && _nativeAttackTargetInstance > 0
+                && (combat.TargetInstance != _nativeAttackTargetInstance || combat.TargetType != _nativeAttackTargetType)) return;
             if (active && (combat.TargetInstance != _nativeAttackTargetInstance
                 || combat.TargetType != _nativeAttackTargetType))
             {
@@ -2595,7 +2624,7 @@ namespace AO.Unity.Prototype
                 var target = attackActive && nativeAppearance?.IsSitting != true ? _selectedTarget?.ServerEntity : null;
                 int id = target?.IdentityInstance ?? 0;
                 int type = target?.IdentityType ?? 0;
-                if (id > 0 && ((type == 50000 && id.ToString() == ServerSession.CurrentCharacterId) || (target.Health > 0 && target.Health <= target.HealthDamage))) id = 0;
+                if (id > 0 && ((type == 50000 && id.ToString() == ServerSession.CurrentCharacterId) || target.IsDead)) id = 0;
                 if (id == 0 && attackActive && nativeAppearance?.IsSitting != true) nativeAppearance?.SetServerAttackActive(false);
                 if (id != _nativeAttackTargetInstance || (id > 0 && type != _nativeAttackTargetType))
                 {

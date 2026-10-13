@@ -870,7 +870,9 @@ namespace AO.Unity.World
             }
             _enterWorldLoadingStartedAt = -1f;
             HidePlayfieldLoadingOverlay(immediate: true);
-            SetPrimaryPlayerLocalMovementEnabled(true);
+            // Resume the character whose transition completed. A scene lookup may
+            // still resolve the preview/bootstrap bridge instead of the controlled actor.
+            characterTransform.GetComponent<PrototypeWalkerController>()?.SetLocalMovementEnabled(true);
         }
 
         private void LogBudgetIfExceeded(string metricName, float valueMs, float warnBudgetMs, float errorBudgetMs)
@@ -1448,11 +1450,15 @@ namespace AO.Unity.World
                 var go = mf.gameObject;
                 if (go == null)
                     continue;
+                if (go.GetComponentInParent<NativePlacedDynel>()?.IdentityType == 51016)
+                    continue;
 
                 if (go.GetComponent<Collider>() != null)
                     continue;
 
-                int triangleCount = mf.sharedMesh.triangles?.Length ?? 0;
+                long triangleCount = 0;
+                for (int sub = 0; sub < mf.sharedMesh.subMeshCount; sub++)
+                    triangleCount += mf.sharedMesh.GetIndexCount(sub) / 3;
                 if (triangleCount <= 0 || triangleCount > triangleLimit)
                     continue;
 
@@ -4154,6 +4160,16 @@ namespace AO.Unity.World
             _activeUseCenteredCoordinates = useCenteredCoordinates;
             _activeCoordinateScale = positionScale;
             _activePlayfieldUsesIndoorRoomSurfaces = loadedSurfaces;
+            // Native presentation supplies interior floor colliders after the diagnostic
+            // surfaces load. Keep transition physics suspended until those floors exist.
+            var nativeVisuals = root.GetComponentInChildren<NativeIndoorVisuals>(true);
+            if (nativeVisuals != null && !nativeVisuals.IsReady
+                && string.IsNullOrEmpty(nativeVisuals.Failure))
+            {
+                _activePlayfieldGlbLoadInProgress = true;
+                int loadTicket = ++_activePlayfieldGlbLoadTicket;
+                StartCoroutine(WaitForNativeIndoorPresentation(pf, root.transform, nativeVisuals, loadTicket));
+            }
             centerWorld = useCenteredCoordinates
                 ? Vector3.zero
                 : horizontalCenter * positionScale;

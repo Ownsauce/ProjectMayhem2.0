@@ -31,13 +31,34 @@ namespace AO.Client.World
 
     public enum CombatUpdateKind { Started, Stopped, Hit, Miss }
 
+    public enum NanoCastUpdateKind { Started, Finished, Interrupted }
+
+    public sealed class NanoCastUpdate
+    {
+        public NanoCastUpdate(NanoCastUpdateKind kind, int casterType, int casterInstance,
+            int nanoId, int targetType = 0, int targetInstance = 0, int result = 0)
+        {
+            Kind = kind; CasterType = casterType; CasterInstance = casterInstance;
+            NanoId = nanoId; TargetType = targetType; TargetInstance = targetInstance; Result = result;
+        }
+        public NanoCastUpdateKind Kind { get; }
+        public int CasterType { get; }
+        public int CasterInstance { get; }
+        public int NanoId { get; }
+        public int TargetType { get; }
+        public int TargetInstance { get; }
+        public int Result { get; }
+    }
+
     public sealed class CombatUpdate
     {
         public CombatUpdate(CombatUpdateKind kind, int attackerType, int attackerInstance,
-            int targetType = 0, int targetInstance = 0, int damage = 0, int specialStatId = 0, int handSlot = 0)
+            int targetType = 0, int targetInstance = 0, int damage = 0, int specialStatId = 0, int handSlot = 0,
+            bool targetDied = false)
         {
             Kind = kind; AttackerType = attackerType; AttackerInstance = attackerInstance;
             TargetType = targetType; TargetInstance = targetInstance; Damage = damage; SpecialStatId = specialStatId; HandSlot = handSlot;
+            TargetDied = targetDied;
         }
         public CombatUpdateKind Kind { get; }
         public int AttackerType { get; }
@@ -47,6 +68,7 @@ namespace AO.Client.World
         public int Damage { get; }
         public int SpecialStatId { get; }
         public int HandSlot { get; }
+        public bool TargetDied { get; }
     }
 
     public sealed class SpecialCooldownUpdate
@@ -77,7 +99,9 @@ namespace AO.Client.World
             IReadOnlyList<InventorySnapshot> containerInventories = null,
             IReadOnlyList<NanoEffectUpdate> nanoEffects = null,
             IReadOnlyList<CombatUpdate> combatUpdates = null,
-            IReadOnlyList<SpecialCooldownUpdate> specialCooldowns = null)
+            IReadOnlyList<SpecialCooldownUpdate> specialCooldowns = null,
+            IReadOnlyList<NanoCastUpdate> nanoCasts = null,
+            IReadOnlyList<NanoEffectUpdate> nanoEffectSnapshot = null)
         {
             Deltas = deltas ?? throw new ArgumentNullException(nameof(deltas));
             Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
@@ -95,9 +119,13 @@ namespace AO.Client.World
             NanoEffects = nanoEffects ?? Array.Empty<NanoEffectUpdate>();
             CombatUpdates = combatUpdates ?? Array.Empty<CombatUpdate>();
             SpecialCooldowns = specialCooldowns ?? Array.Empty<SpecialCooldownUpdate>();
+            NanoCasts = nanoCasts ?? Array.Empty<NanoCastUpdate>();
+            NanoEffectSnapshot = nanoEffectSnapshot;
         }
 
         public IReadOnlyList<SpecialCooldownUpdate> SpecialCooldowns { get; }
+        public IReadOnlyList<NanoCastUpdate> NanoCasts { get; }
+        public IReadOnlyList<NanoEffectUpdate> NanoEffectSnapshot { get; }
         public IReadOnlyList<CombatUpdate> CombatUpdates { get; }
         public IReadOnlyList<NanoEffectUpdate> NanoEffects { get; }
         public IReadOnlyList<WorldEntityDelta> Deltas { get; }

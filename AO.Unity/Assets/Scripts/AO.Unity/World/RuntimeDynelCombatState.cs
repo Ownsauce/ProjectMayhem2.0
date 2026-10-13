@@ -107,6 +107,16 @@ namespace AO.Unity.World
             string dynelName = gameObject != null ? gameObject.name : "<null>";
             Debug.Log($"[RuntimeDeath] Attempt start for {dynelName}.");
 
+            var cat = GetComponentInChildren<CatAnimPlayer>(true);
+            if (cat != null && cat.PlayOnce("death", CatAnimPlayer.DefaultBlendSeconds,
+                () => cat.Paused = true))
+            {
+                lastDeathAnimationDuration = Mathf.Max(0.25f, cat.Duration);
+                deathClipDetected = true;
+                SuppressAnimationDriversForDeath();
+                return;
+            }
+
             // Preferred path: let the active appearance animation driver play death one-shot.
             // This is usually the renderer-driving path for runtime GLB actors.
             var appearance = GetComponent<CharacterAppearanceController>();
@@ -341,6 +351,7 @@ namespace AO.Unity.World
 
         private void UnfreezeCorpsePose()
         {
+            foreach (var cat in GetComponentsInChildren<CatAnimPlayer>(true)) cat.Paused = false;
             var animators = GetComponentsInChildren<Animator>(true);
             for (int i = 0; i < animators.Length; i++)
             {
@@ -489,6 +500,7 @@ namespace AO.Unity.World
 
         private void FreezeInCorpsePose()
         {
+            foreach (var cat in GetComponentsInChildren<CatAnimPlayer>(true)) cat.Paused = true;
             var animators = GetComponentsInChildren<Animator>(true);
             for (int i = 0; i < animators.Length; i++)
             {
@@ -512,6 +524,13 @@ namespace AO.Unity.World
                     state.speed = 0f;
                 }
             }
+        }
+
+        public void OnServerVisualReady()
+        {
+            if (!IsDead) return;
+            deathAnimationStarted = false;
+            TryStartDeathAnimationImmediate();
         }
     }
 }

@@ -67,6 +67,7 @@ namespace AO.Unity.World
         {
             if (entity?.EquipmentAppearance == null) return;
             if (_entity == null || entity.Appearance != _entity.Appearance
+                || entity.MonsterData != _entity.MonsterData
                 || !ReferenceEquals(entity.EquipmentAppearance, _entity.EquipmentAppearance))
             {
                 _retryAt = 0f;
@@ -97,6 +98,14 @@ namespace AO.Unity.World
             if (visual == null || (local != null && !local.IsCurrentBodyVisualReady) || Time.unscaledTime < _retryAt) return;
             string signature = _desiredSignature;
             if (visual == _appliedVisual && signature == _appliedSignature) return;
+            if (_entity.IsMorphedPlayer)
+            {
+                ReleaseVisuals();
+                _appliedVisual = visual;
+                _appliedSignature = signature;
+                _appliedBodySignature = null;
+                return;
+            }
             try
             {
                 if (!EnsureResources()) { _retryAt = Time.unscaledTime + 1f; return; }
@@ -364,7 +373,7 @@ namespace AO.Unity.World
 
         private static string Signature(NearbyEntity entity)
         {
-            var result = new StringBuilder().Append(entity.Appearance).Append(':')
+            var result = new StringBuilder().Append(entity.Appearance).Append(':').Append(entity.MonsterData).Append(':')
                 .Append(entity.EquipmentAppearance.VisualFlags).Append(':').Append(entity.EquipmentAppearance.HeadMeshId);
             foreach (var t in entity.EquipmentAppearance.Textures)
                 result.Append('|').Append(t.Position).Append(':').Append(t.TextureId);

@@ -165,6 +165,8 @@ namespace AO.Unity.Prototype
         private readonly List<AuthoritativeNetworkClient.LootItem> _activeCorpseLootItems = new();
         private CharacterRuntimeBridge _lookAtTarget;
         private CharacterRuntimeBridge _corpseLootTarget;
+        private readonly List<InventoryEntrySnapshot> _nativeCorpseLootItems = new();
+        private int _nativeCorpseInstance;
         private string _activeCorpseLootEntityId = string.Empty;
         private Coroutine _emptyCorpseCleanupCoroutine;
         private RectTransform _npcDialogChatScrollContent;
@@ -599,8 +601,11 @@ namespace AO.Unity.Prototype
                 _context.StateChanged -= OnContextStateChanged;
             if (_gameServerSession != null)
             {
+                _gameServerSession.NanoEffectChanged -= HandleServerNanoEffect;
+                _gameServerSession.NanoEffectsRestored -= HandleServerNanoSnapshot;
                 _gameServerSession.InventoryChanged -= HandleServerInventoryChanged;
                 _gameServerSession.CharacterStateChanged -= HandleServerCharacterStateChanged;
+                _gameServerSession.EntityRemoved -= HandleNativeEntityRemoved;
             }
         }
 
@@ -675,6 +680,10 @@ namespace AO.Unity.Prototype
 
         private void CloseCorpseLootWindow()
         {
+            if (_nativeCorpseInstance > 0 && _gameServerSession?.IsInWorld == true)
+                UseNativeCorpse(_nativeCorpseInstance);
+            _nativeCorpseInstance = 0;
+            _nativeCorpseLootItems.Clear();
             if (_corpseLootWindow?.Root == null)
                 return;
 
@@ -814,6 +823,8 @@ namespace AO.Unity.Prototype
 
                 if (rightClickPressed)
                 {
+                    if (_context?.IsNativeGameplay == true && bridge.ServerEntity?.IsDead == true && !bridge.ServerEntity.IsCorpse)
+                        return; // Wait for the independently identified corpse, rather than opening an NPC dialog.
                     if (IsDeadCorpseTarget(bridge))
                     {
                         OpenCorpseLootWindow(bridge);
@@ -1235,6 +1246,25 @@ namespace AO.Unity.Prototype
         {
             if (target == null || _corpseLootWindow?.Root == null)
                 return;
+            if (target.ServerEntity?.IsCorpse == true && _context?.IsNativeGameplay == true)
+            {
+                if (_nativeCorpseInstance == target.ServerEntity.IdentityInstance && _corpseLootWindow.Root.gameObject.activeSelf)
+                {
+                    _corpseLootWindow.Root.SetAsLastSibling();
+                    return;
+                }
+                _nativeCorpseInstance = target.ServerEntity.IdentityInstance;
+                _corpseLootTarget = target;
+                _nativeCorpseLootItems.Clear();
+                _activeCorpseLootItems.Clear();
+                _corpseLootWindow.Title.text = target.ServerEntity.Name;
+                _corpseLootText.text = "Loading loot...";
+                RefreshCorpseLootSlots(0);
+                _corpseLootWindow.Root.gameObject.SetActive(true);
+                _corpseLootWindow.Root.SetAsLastSibling();
+                UseNativeCorpse(_nativeCorpseInstance);
+                return;
+            }
 
             _corpseLootTarget = target;
             _activeCorpseLootItems.Clear();
@@ -1294,6 +1324,61 @@ namespace AO.Unity.Prototype
                 _emptyCorpseCleanupCoroutine = StartCoroutine(CleanupEmptyCorpseAfterDelay(payload.EntityId, 3.0f));
         }
 
+        private async void UseNativeCorpse(int instance)
+        {
+            try { await _gameServerSession.UseWorldObjectAsync(51050, instance); }
+            catch (Exception exception)
+            {
+                if (_nativeCorpseInstance == instance && _corpseLootText != null) _corpseLootText.text = exception.Message;
+            }
+        }
+
+        private void HandleNativeEntityRemoved(int type, int instance)
+        {
+            if (type != 51050 || instance != _nativeCorpseInstance) return;
+            _nativeCorpseInstance = 0;
+            _nativeCorpseLootItems.Clear();
+            _activeCorpseLootItems.Clear();
+            CloseCorpseLootWindow();
+        }
+
+        private void ApplyNativeCorpseInventory(InventorySnapshot snapshot)
+        {
+            if (snapshot.ContainerInstance != _nativeCorpseInstance) return;
+            _nativeCorpseLootItems.Clear();
+            _nativeCorpseLootItems.AddRange(snapshot.Entries.OrderBy(item => item.Slot));
+            _activeCorpseLootItems.Clear();
+            foreach (var item in _nativeCorpseLootItems)
+            {
+                int aoid = item.LowId;
+                string name = $"Item {item.LowId}";
+                if (AO.Unity.Assets.AOItemObjectResolver.TryResolve(item.LowId, item.HighId, item.Quality, out var raw))
+                {
+                    aoid = raw.AOID;
+                    name = raw.Name;
+                    AODataManager.Instance?.RegisterRuntimeItem(raw, item.LowId, item.HighId);
+                }
+                _activeCorpseLootItems.Add(new AuthoritativeNetworkClient.LootItem(aoid, name, item.Quantity, item.Quality));
+            }
+            _corpseLootText.text = _activeCorpseLootItems.Count == 0 ? "No loot remaining." : "Loot";
+            RefreshCorpseLootSlots(_activeCorpseLootItems.Count);
+        }
+
+        private async void TakeNativeCorpseLoot(int slotIndex)
+        {
+            if (slotIndex < 0 || slotIndex >= _nativeCorpseLootItems.Count) return;
+            try
+            {
+                if (slotIndex < _corpseLootSlotButtons.Count) _corpseLootSlotButtons[slotIndex].interactable = false;
+                await _gameServerSession.TakeCorpseLootAsync(_nativeCorpseInstance, _nativeCorpseLootItems[slotIndex].Slot);
+            }
+            catch (Exception exception)
+            {
+                _context?.PublishStatus($"Loot failed: {exception.Message}");
+                RefreshCorpseLootSlots(_activeCorpseLootItems.Count);
+            }
+        }
+
         private IEnumerator CleanupEmptyCorpseAfterDelay(string entityId, float delaySeconds)
         {
             if (string.IsNullOrWhiteSpace(entityId))
@@ -1317,6 +1402,11 @@ namespace AO.Unity.Prototype
 
         private void TryTakeCorpseLootSlot(int slotIndex)
         {
+            if (_nativeCorpseInstance > 0 && _context?.IsNativeGameplay == true)
+            {
+                TakeNativeCorpseLoot(slotIndex);
+                return;
+            }
             if (slotIndex < 0 || slotIndex >= _activeCorpseLootItems.Count)
                 return;
 
@@ -2451,12 +2541,19 @@ namespace AO.Unity.Prototype
                 }
 
                 float yOffset = 2.1f;
-                var renderer = bridge.GetComponentInChildren<Renderer>();
-                if (renderer != null)
-                    yOffset = Mathf.Max(2.1f, renderer.bounds.max.y - bridge.transform.position.y + 0.3f);
+                var body = bridge.GetComponent<CharacterAppearanceController>();
+                if (body != null && body.TryResolvePrimaryVisibleBounds(out var bodyBounds))
+                    yOffset = Mathf.Max(0.3f, bodyBounds.max.y - bridge.transform.position.y + 0.3f);
+                else
+                    foreach (var renderer in bridge.GetComponentsInChildren<Renderer>())
+                    {
+                        if (!renderer.enabled || renderer.GetComponent<TextMesh>() != null
+                            || renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer) continue;
+                        yOffset = Mathf.Max(yOffset, renderer.bounds.max.y - bridge.transform.position.y + 0.3f);
+                    }
                 _worldNameplateYOffsetByBridgeId[id] = yOffset;
                 Vector3 worldAnchor = bridge.transform.position + Vector3.up * yOffset;
-                text.transform.localPosition = new Vector3(0f, yOffset, 0f);
+                text.transform.position = worldAnchor;
                 Vector3 screen = Camera.main.WorldToScreenPoint(worldAnchor);
                 float distance = Vector3.Distance(cameraPosition, worldAnchor);
 
@@ -2602,6 +2699,7 @@ namespace AO.Unity.Prototype
         {
             if (target == null)
                 return false;
+            if (target.ServerEntity != null) return target.ServerEntity.IsCorpse;
 
             var runtimeCombat = target.GetComponent<RuntimeDynelCombatState>();
             return runtimeCombat != null && runtimeCombat.IsDead;

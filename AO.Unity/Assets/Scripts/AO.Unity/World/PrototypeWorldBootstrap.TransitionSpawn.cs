@@ -173,6 +173,7 @@ namespace AO.Unity.World
             int loadTicket)
         {
             _pendingTransitionCharacter = characterTransform;
+            characterTransform?.GetComponent<PrototypeWalkerController>()?.SetLocalMovementEnabled(false);
             _pendingTransitionAoPosition = targetAoPosition;
             _pendingTransitionYaw = targetYaw;
             _pendingTransitionPlayfieldId = pf;

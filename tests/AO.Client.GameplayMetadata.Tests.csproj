@@ -6,6 +6,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="AO.Client.GameplayMetadata.Tests.cs" />
+    <Compile Include="../AO.Unity/Assets/Scripts/AO.Unity/World/DirectOutdoor/ResourceDatabase.cs" />
+    <Compile Include="../AO.Unity/Assets/Scripts/AO.Unity/World/DirectOutdoor/CatMesh/MonsterDataResolver.cs" />
+    <Compile Include="../AO.Unity/Assets/Scripts/AO.Unity/World/DirectOutdoor/CatMesh/CatAnimResolver.cs" />
     <Compile Include="../AO.Unity/Assets/Scripts/AO.Unity/Assets/AOItemObjectResolver.cs" />
     <Compile Include="../AO.Unity/Assets/Scripts/AO.Unity/Assets/AOItemIconResolver.cs" />
     <ProjectReference Include="../AO.Assets/AO.Assets.csproj" />

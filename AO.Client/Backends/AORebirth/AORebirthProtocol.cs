@@ -361,6 +361,26 @@ namespace AO.Client.Backends.AORebirth
             return CreateN3Packet(owner, body.ToArray());
         }
 
+        public static byte[] CreateWorldObjectUse(int owner, int targetType, int targetId)
+        {
+            if (owner <= 0 || targetType <= 0 || targetId <= 0) throw new ArgumentOutOfRangeException(nameof(targetId));
+            using var body = new MemoryStream();
+            WriteInt32(body, 0x52526858); WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(1);
+            WriteInt32(body, 0); WriteInt32(body, 1); WriteInt32(body, 3); WriteInt32(body, 0);
+            WriteInt32(body, 50000); WriteInt32(body, owner); WriteInt32(body, targetType); WriteInt32(body, targetId);
+            return CreateN3Packet(owner, body.ToArray());
+        }
+
+        public static byte[] CreateLootTake(int owner, int handle, int slot)
+        {
+            if (owner <= 0 || handle <= 0 || handle > ushort.MaxValue || slot < 0 || slot > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(handle));
+            using var body = new MemoryStream();
+            WriteInt32(body, 0x5469373f); WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(0);
+            WriteInt32(body, 107); WriteInt32(body, (handle << 16) | slot); WriteInt32(body, 0x6f);
+            return CreateN3Packet(owner, body.ToArray());
+        }
+
         public static bool TryReadSpecialCooldown(AORebirthPacket packet, int owner, out SpecialCooldownUpdate cooldown)
         {
             cooldown = null;
@@ -407,18 +427,20 @@ namespace AO.Client.Backends.AORebirth
                 int type = r.ReadInt32(), id = r.ReadInt32(); r.ReadByte();
                 int damage = r.ReadInt32(); r.ReadInt32(); int hand = r.ReadInt32();
                 int targetType = r.ReadInt32(), target = r.ReadInt32();
-                r.ReadInt32(); r.ReadInt32(); r.ReadInt32();
+                int flags = r.ReadInt32(); r.ReadInt32(); r.ReadInt32();
                 if (damage < 0 || target <= 0) return false;
-                update = new CombatUpdate(CombatUpdateKind.Hit, type, id, targetType, target, damage, handSlot: hand); return true;
+                update = new CombatUpdate(CombatUpdateKind.Hit, type, id, targetType, target, damage, handSlot: hand,
+                    targetDied: (flags & 4) != 0); return true;
             }
             if (TryCreateN3Reader(packet, 0x754f1115, 41, out r))
             {
                 int type = r.ReadInt32(), id = r.ReadInt32(); r.ReadByte();
                 int hand = r.ReadInt32(); int damage = r.ReadInt32(); r.ReadInt32();
                 int targetType = r.ReadInt32(), target = r.ReadInt32();
-                int special = r.ReadInt32(); r.ReadInt32();
+                int special = r.ReadInt32(); int flags = r.ReadInt32();
                 if (damage < 0 || target <= 0) return false;
-                update = new CombatUpdate(CombatUpdateKind.Hit, type, id, targetType, target, damage, special, hand); return true;
+                update = new CombatUpdate(CombatUpdateKind.Hit, type, id, targetType, target, damage, special, hand,
+                    targetDied: (flags & 4) != 0); return true;
             }
             if (TryCreateN3Reader(packet, 0x5c654b28, 41, out r))
             {
@@ -436,17 +458,20 @@ namespace AO.Client.Backends.AORebirth
             using var body = new MemoryStream();
             WriteInt32(body, 0x5e477770); WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(0);
             WriteInt32(body, 0x41); WriteInt32(body, 0); WriteInt32(body, 0); WriteInt32(body, 0);
-            WriteInt32(body, 0); WriteInt32(body, nanoId); WriteInt16(body, 0);
+            WriteInt32(body, 53019); WriteInt32(body, nanoId); WriteInt16(body, 0);
             return CreateN3Packet(owner, body.ToArray());
         }
 
-        public static byte[] CreateNanoCast(int owner, int nanoId, int targetType, int targetInstance)
+        public static byte[] CreateNanoCast(int owner, int nanoId, int targetType, int targetInstance,
+            bool implicitSelfTarget = true)
         {
             if (owner <= 0 || nanoId <= 0 || targetInstance <= 0 || targetType <= 0) throw new ArgumentOutOfRangeException(nameof(nanoId));
             using var body = new MemoryStream();
             WriteInt32(body, 0x5e477770); WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(0);
-            WriteInt32(body, 0x13); WriteInt32(body, 0); WriteInt32(body, targetType); WriteInt32(body, targetInstance);
-            WriteInt32(body, 0); WriteInt32(body, nanoId); WriteInt16(body, 0);
+            WriteInt32(body, 0x13); WriteInt32(body, 0);
+            bool self = implicitSelfTarget && targetType == 50000 && targetInstance == owner;
+            WriteInt32(body, self ? 0 : targetType); WriteInt32(body, self ? 0 : targetInstance);
+            WriteInt32(body, 53019); WriteInt32(body, nanoId); WriteInt16(body, 0);
             return CreateN3Packet(owner, body.ToArray());
         }
 
@@ -459,6 +484,34 @@ namespace AO.Client.Backends.AORebirth
             if (r.ReadInt32() != 3) return false;
             correlation = r.ReadInt32();
             return r.ReadInt32() == 50000 && r.ReadInt32() == owner && (result == 1 || result == 2);
+        }
+
+        public static bool TryReadNanoCastUpdate(AORebirthPacket packet, out NanoCastUpdate update)
+        {
+            update = null;
+            if (TryCreateN3Reader(packet, 0x25314d6d, 37, out var r))
+            {
+                int type = r.ReadInt32(), id = r.ReadInt32(); r.ReadByte();
+                int nano = r.ReadInt32(), targetType = r.ReadInt32(), targetId = r.ReadInt32();
+                r.ReadInt32();
+                int casterType = r.ReadInt32(), casterId = r.ReadInt32();
+                if (nano <= 0) return false;
+                if (casterId == 0) { casterType = type; casterId = id; }
+                update = new NanoCastUpdate(NanoCastUpdateKind.Started, casterType, casterId,
+                    nano, targetType, targetId);
+                return true;
+            }
+            if (!TryCreateN3Reader(packet, 0x5e477770, 39, out r)) return false;
+            int ownerType = r.ReadInt32(), owner = r.ReadInt32(); r.ReadByte();
+            int action = r.ReadInt32();
+            if (action != 0x6b && action != 0x6c) return false;
+            r.Skip(12);
+            int p1 = r.ReadInt32(), p2 = r.ReadInt32(); r.ReadInt16();
+            int program = action == 0x6b ? p2 : p1;
+            if (program <= 0) return false;
+            update = new NanoCastUpdate(action == 0x6b ? NanoCastUpdateKind.Finished : NanoCastUpdateKind.Interrupted,
+                ownerType, owner, program, result: action == 0x6b ? p1 : p2);
+            return true;
         }
 
         public static bool TryReadNanoEffect(AORebirthPacket packet, int owner, out NanoEffectUpdate effect)
@@ -754,6 +807,7 @@ namespace AO.Client.Backends.AORebirth
                 int visualFlags = reader.ReadInt16();
                 int visibleTitle = reader.ReadByte();
                 CharacterAppearanceSnapshot equipmentAppearance = null;
+                IReadOnlyList<NanoEffectUpdate> activeNanos = null;
                 if (reader.Remaining > 0)
                 {
                     reader.Skip(reader.ReadBoundedCount("SCFU unknown data", reader.Remaining));
@@ -765,7 +819,18 @@ namespace AO.Client.Backends.AORebirth
                     if ((flags & ScfuIsImmune) != 0) reader.Skip(1);
                     if ((flags & ScfuUnknownFlag3) != 0) reader.Skip(1);
                     int nanoCount = ReadX3F1Count(reader, "active nanos", 4096);
-                    reader.Skip(checked(nanoCount * 20));
+                    if (nanoCount > reader.Remaining / 20) throw new EndOfStreamException();
+                    var runningNanos = new List<NanoEffectUpdate>(nanoCount);
+                    for (int index = 0; index < nanoCount; index++)
+                    {
+                        int nanoType = reader.ReadInt32(), nanoId = reader.ReadInt32();
+                        reader.ReadInt32(); // Active nano instance, distinct from program ID.
+                        int remaining = reader.ReadInt32();
+                        reader.ReadInt32(); // Second timer; AORebirth supplies remaining time in both.
+                        if (nanoType == 53019 && nanoId > 0 && remaining > 0)
+                            runningNanos.Add(new NanoEffectUpdate(nanoId, remaining));
+                    }
+                    activeNanos = runningNanos.ToArray();
                     if ((flags & ScfuHasWaypoints) != 0)
                     {
                         reader.Skip(8); // Waypoint owner identity.
@@ -793,7 +858,7 @@ namespace AO.Client.Backends.AORebirth
                 entity = new NearbyEntity(identityType, identityInstance, kind, name, level,
                     health, healthDamage, playfieldId, x, y, z, appearance,
                     npcFamily, npcLosHeight, npcUnknown, monsterData, monsterScale,
-                    visualFlags, visibleTitle, equipmentAppearance);
+                    visualFlags, visibleTitle, equipmentAppearance, activeNanos);
                 return true;
             }
             catch (EndOfStreamException) { return false; }
@@ -937,9 +1002,46 @@ namespace AO.Client.Backends.AORebirth
                 }
                 if (opcode == CorpseFullUpdate)
                 {
-                    worldObject = new WorldObject(identityType, identityInstance,
-                        WorldObjectKind.Corpse, string.Empty, defaultPlayfieldId,
-                        false, 0, 0, 0);
+                    reader.Skip(16); // Unknown1/2 and owner identity.
+                    float x = reader.ReadSingle(), y = reader.ReadSingle(), z = reader.ReadSingle();
+                    float qx = reader.ReadSingle(), qy = reader.ReadSingle(), qz = reader.ReadSingle(), qw = reader.ReadSingle();
+                    int playfield = reader.ReadInt32();
+                    reader.Skip(10); // State machine and unknown short.
+                    int count = ReadX3F1Count(reader, "corpse stats", 2048);
+                    if (count > reader.Remaining / 8) throw new EndOfStreamException();
+                    var stats = new Dictionary<int, int>();
+                    for (int i = 0; i < count; i++) stats[reader.ReadInt32()] = reader.ReadInt32();
+                    string name = reader.ReadSizedAscii("corpse name", 4096);
+                    reader.Skip(8);
+                    reader.Skip(checked(ReadX3F1Count(reader, "corpse unknown array", 4096) * 4));
+                    reader.Skip(4);
+                    int effects = ReadX3F1Count(reader, "corpse animation effects", 256);
+                    if (effects > reader.Remaining / 60) throw new EndOfStreamException();
+                    uint monster = 0;
+                    for (int i = 0; i < effects; i++)
+                    {
+                        int effectType = reader.ReadInt32();
+                        reader.Skip(48);
+                        uint model = reader.ReadUInt32(); reader.Skip(4);
+                        if (effectType == 53031) monster = model;
+                    }
+                    int sourceType = reader.ReadInt32(), sourceId = reader.ReadInt32();
+                    if (stats.TryGetValue(415, out int corpseType)) sourceType = corpseType;
+                    if (stats.TryGetValue(416, out int corpseId)) sourceId = corpseId;
+                    int textureCount = ReadX3F1Count(reader, "corpse textures", 4096);
+                    if (textureCount > reader.Remaining / 12) throw new EndOfStreamException();
+                    var textures = new AppearanceTexture[textureCount];
+                    for (int i = 0; i < textureCount; i++)
+                        textures[i] = new AppearanceTexture(reader.ReadInt32(), reader.ReadInt32(), reader.ReadInt32());
+                    reader.Skip(4);
+                    if (reader.Remaining != 0) return false;
+                    stats.TryGetValue(360, out int scale);
+                    var corpse = new NearbyEntity(identityType, identityInstance, NearbyEntityKind.Npc,
+                        name, 0, 1, 1, playfield, x, y, z, monsterData: monster, monsterScale: scale,
+                        equipmentAppearance: new CharacterAppearanceSnapshot(textures, null, 0),
+                        corpseSourceType: sourceType, corpseSourceInstance: sourceId);
+                    worldObject = new WorldObject(identityType, identityInstance, WorldObjectKind.Corpse,
+                        name, playfield, true, x, y, z, sourceType, sourceId, corpse, qx, qy, qz, qw);
                     return true;
                 }
                 return false;

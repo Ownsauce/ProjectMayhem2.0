@@ -11,6 +11,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using AO.Unity;
 using AO.Unity.Assets;
+using AO.Client.World;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -425,6 +426,28 @@ namespace AO.Unity.World
             disableCharacterMeshAnimations = value;
         }
 
+        private uint _serverMonsterData;
+        private int _serverMonsterScale;
+        private string ServerMorphMeshName => $"MonsterData_{_serverMonsterData}";
+
+        public void ClearServerBody()
+        {
+            _serverMonsterData = 0;
+            _serverMonsterScale = 0;
+            ClearTemporaryMeshResourceOverride();
+        }
+
+        public void SetServerBody(NearbyEntity entity)
+        {
+            uint monster = entity.IsMorphedPlayer ? entity.MonsterData : 0;
+            bool changed = _serverMonsterData != monster || _serverMonsterScale != entity.MonsterScale;
+            _serverMonsterData = monster;
+            _serverMonsterScale = entity.MonsterScale;
+            SetTemporaryMeshResourceOverride(monster > 0 ? ServerMorphMeshName
+                : ServerAppearanceVisualController.BodyMeshName(entity.Appearance));
+            if (changed) ApplyIfChanged(force: true);
+        }
+
         public void SetTemporaryMeshResourceOverride(string meshResourceName)
         {
             if (_isDestroying || !Application.isPlaying)
@@ -685,6 +708,8 @@ namespace AO.Unity.World
         private void Update()
         {
             UpdateWeaponShotVfxLifetime();
+            if (AO.Unity.Prototype.PrototypeUiContext.Active?.IsNativeGameplay == true)
+                UpdateServerAttackProgress();
             HandleWalkToggleInput();
             HandleSitToggleInput();
             HandleAttackToggleInput();
@@ -964,7 +989,11 @@ namespace AO.Unity.World
             object importer = null;
             try
             {
-                GameObject directVisual = await DirectCatMeshRuntime.InstantiateAsync(meshResourceName, transform);
+                bool isMorph = _serverMonsterData > 0 && meshResourceName == ServerMorphMeshName;
+                uint monster = _serverMonsterData;
+                GameObject directVisual = isMorph
+                    ? await DirectCatMeshRuntime.InstantiateMonsterAsync((int)monster, transform)
+                    : await DirectCatMeshRuntime.InstantiateAsync(meshResourceName, transform);
                 if (directVisual != null)
                 {
                     if (!CanAttachRuntimeVisual(requestId))
@@ -1008,7 +1037,9 @@ namespace AO.Unity.World
 
                 string meshPath = ResolveMeshPath(meshResourceName);
                 if (string.IsNullOrWhiteSpace(meshPath) || !File.Exists(meshPath))
-                    meshPath = await AOCharacterMeshResolver.ResolveAsync(meshResourceName);
+                    meshPath = isMorph
+                        ? await AOCharacterMeshResolver.ResolveMonsterAsync(monster, 0, System.Threading.CancellationToken.None)
+                        : await AOCharacterMeshResolver.ResolveAsync(meshResourceName);
                 meshPath = GlbDataUriLoadPathResolver.Resolve(meshPath, true);
                 if (string.IsNullOrWhiteSpace(meshPath) || !File.Exists(meshPath))
                 {
@@ -1465,6 +1496,12 @@ namespace AO.Unity.World
             if (!_initializedScale)
                 CaptureBaseScale();
 
+            if (_serverMonsterData > 0 && _spawnedPrefabVisual != null)
+            {
+                _spawnedPrefabVisual.transform.localScale = Vector3.one
+                    * (_serverMonsterScale > 0 ? _serverMonsterScale / 100f : 1f);
+                return;
+            }
             float scale = _breedScaleMultipliers.TryGetValue(breedId, out var mapped) ? mapped : 1f;
             Vector3 nextScale = _baseVisualScale * Mathf.Max(0.1f, scale);
             nextScale.x = Mathf.Abs(nextScale.x);
@@ -1558,7 +1595,8 @@ namespace AO.Unity.World
             }
             bool attackCycleAllowed = attackToggleActive && !_sitToggled && !_sitTransitionPlaying && !jumpBusy;
             bool nativeCatCombat = directAnim != null && AO.Unity.Prototype.PrototypeUiContext.Active?.IsNativeGameplay == true;
-            if (!nativeCatCombat) UpdateAttackCombatSequence(attackCycleAllowed, shouldMove);
+            if (AO.Unity.Prototype.PrototypeUiContext.Active?.IsNativeGameplay != true)
+                UpdateAttackCombatSequence(attackCycleAllowed, shouldMove);
 
             if (directAnim != null)
             {
@@ -1566,6 +1604,7 @@ namespace AO.Unity.World
                 // update replace sit-start/sit-stop before their callback runs.
                 if (_sitTransitionPlaying || _jumpInAir)
                     return;
+                if (directAnim.IsPlayingOneShot) return;
 
                 // Keep current locomotion beneath the landing overlay.
                 // This lets idle->run and run->idle changes take effect immediately
@@ -1768,6 +1807,7 @@ namespace AO.Unity.World
 
         private void ApplyBreedTexture(int breedId)
         {
+            if (_serverMonsterData > 0) return;
             if (targetRenderer == null)
                 return;
 
@@ -1851,6 +1891,7 @@ namespace AO.Unity.World
 
         private void RefreshEquippedBodyTextures()
         {
+            if (_serverMonsterData > 0) return;
             if (HasServerBodyTextures) return;
             if (!Application.isPlaying || _isDestroying)
                 return;
@@ -2255,7 +2296,7 @@ namespace AO.Unity.World
                 .GetComponentInChildren<CatAnimPlayer>(true);
             if (directAnim != null)
             {
-                directAnim.PlayDeferred("idle");
+                if (string.IsNullOrEmpty(directAnim.CurrentLogicalName)) directAnim.PlayDeferred("idle");
                 return;
             }
 
@@ -2911,6 +2952,11 @@ namespace AO.Unity.World
 
             if (WasQPressedThisFrame())
             {
+                if (AO.Unity.Prototype.PrototypeUiContext.Active?.IsNativeGameplay == true)
+                {
+                    SetServerAttackActive(!attackToggleActive);
+                    return;
+                }
                 attackToggleActive = !attackToggleActive;
                 if (attackToggleActive)
                 {
@@ -4738,17 +4784,68 @@ namespace AO.Unity.World
 
         private bool _directCombatHitPlaying;
 
-        private int ResolveDirectWeaponSet()
+        private void UpdateServerAttackProgress()
         {
+            if (!attackToggleActive || _sitToggled || _sitTransitionPlaying)
+            {
+                _attackCycleRunning = false;
+                SetAttackCycleUiVisible(false);
+                return;
+            }
+            EnsureAttackCycleUi();
+            SetAttackCycleUiVisible(true);
+            if (!_attackCycleRunning) StartAttackWindupPhase();
+            bool moving = Mathf.Abs(_localLocomotionForward) > 0.001f || Mathf.Abs(_localLocomotionStrafe) > 0.001f;
+            bool ranged = TryBuildAttackWeaponProfile(out int skill, out _) && IsRangedAttackSkill(skill);
+            bool paused = _externalAttackCyclePaused || (ranged && (moving || _jumpInAir));
+            if (paused)
+            {
+                if (!_attackCyclePaused) { _attackCyclePaused = true; _attackCyclePauseStartedAt = Time.time; }
+                return;
+            }
+            if (_attackCyclePaused)
+            {
+                _attackPhaseStartTime += Time.time - _attackCyclePauseStartedAt;
+                _attackCyclePaused = false;
+            }
+            UpdateAttackCycleUi();
+            if (Time.time < _attackPhaseStartTime + _attackPhaseDuration) return;
+            // Predict presentation only. Damage and strike animations still require
+            // a server hit/miss; this path never runs the local combat simulator.
+            if (_attackPhaseIsRecharge) StartAttackWindupPhase();
+            else StartAttackRechargePhase();
+        }
+
+        private int ResolveDirectWeaponSet(int handSlot = 6)
+        {
+            if (_serverMonsterData > 0) return 0;
+            long instance = GetEquippedInstanceIdForAttackSide(handSlot == 8 ? -1 : 1);
+            var definition = AO.Core.Characters.CharacterEquipment.GetItemInstance?.Invoke(instance)?.Definition;
+            var raw = definition == null ? null : AO.Data.Unity.AODataManager.Instance?.GetRawItemByAoid(definition.AOID);
+            if (raw != null)
+            {
+                int bitmap = raw.StatValues?.FirstOrDefault(value => value != null && value.Stat == 298)?.RawValue ?? 0;
+                int weaponSkill = ResolvePrimaryAttackSkillId(raw);
+                if (weaponSkill > 0)
+                    return AO.Assets.ResourceDatabase.AOCombatAnimationCatalog.GetWeaponSet(weaponSkill, (bitmap & 320) == 320);
+            }
             TryBuildAttackWeaponProfile(out int skill, out WeaponHandMode mode);
             return AO.Assets.ResourceDatabase.AOCombatAnimationCatalog.GetWeaponSet(skill, mode == WeaponHandMode.EitherOrBoth);
         }
 
         public bool TryPlayServerWeaponHit(int specialStat, int handSlot = 0)
         {
+            RefreshAttackHandContext();
+            if (specialStat == 0 && attackToggleActive)
+            {
+                _attackPhaseSide = handSlot == 8 ? -1 : 1;
+                _attackPreferLeftNext = handSlot != 8;
+                ResolveAttackTimingsForSide(_attackPhaseSide, out _attackPhaseAttackSeconds, out _attackPhaseRechargeSeconds);
+                StartAttackRechargePhase();
+            }
             var directAnim = _spawnedPrefabVisual?.GetComponentInChildren<CatAnimPlayer>(true);
             if (directAnim == null) return TryPlayRecentAttackHitAction(out _);
-            directAnim.SetAnimSet(ResolveDirectWeaponSet());
+            directAnim.SetAnimSet(ResolveDirectWeaponSet(handSlot));
             string action = specialStat == 148 ? "special-burst" : specialStat == 167 ? "special-fullauto"
                 : specialStat == 142 ? "special-brawl" : specialStat == 144 ? "special-dimach" : "attack-hit";
             if (handSlot == 8 && specialStat != 142 && specialStat != 144) action += "-left";
@@ -4761,9 +4858,29 @@ namespace AO.Unity.World
 
         public void SetServerAttackActive(bool active)
         {
-            if (attackToggleActive == active) return;
+            if (attackToggleActive == active)
+            {
+                if (!active) EndAttackCombatSequence();
+                return;
+            }
             attackToggleActive = active;
-            if (active) { ApplyAttackAnimationRule(force: true); BeginAttackCombatSequence(); }
+            if (active)
+            {
+                ApplyAttackAnimationRule(force: true);
+                if (AO.Unity.Prototype.PrototypeUiContext.Active?.IsNativeGameplay == true)
+                {
+                    RefreshAttackHandContext();
+                    StartAttackWindupPhase();
+                    var directAnim = _spawnedPrefabVisual?.GetComponentInChildren<CatAnimPlayer>(true);
+                    if (directAnim != null)
+                    {
+                        directAnim.SetAnimSet(ResolveDirectWeaponSet());
+                        _directCombatHitPlaying = directAnim.PlayOnce("attack-start", CatAnimPlayer.DefaultBlendSeconds,
+                            () => _directCombatHitPlaying = false);
+                    }
+                }
+                else BeginAttackCombatSequence();
+            }
             else
             {
                 EndAttackCombatSequence();
@@ -5267,6 +5384,11 @@ namespace AO.Unity.World
 
         private void RefreshDebugHeadVisual()
         {
+            if (_serverMonsterData > 0)
+            {
+                ClearDebugHeadVisual();
+                return;
+            }
             if (HasServerAppearance)
             {
                 if (_debugHeadVisual != null || !string.IsNullOrEmpty(_debugHeadLoadInProgressKey))

@@ -208,7 +208,10 @@ public sealed class CatAnimPlayer : MonoBehaviour
 
     IEnumerator PlayDeferredRoutine(string logicalName, float blendSeconds)
     {
+        string previous = _currentLogicalName;
         yield return null;
+        // A hit, cast, or movement command arriving after scheduling owns playback.
+        if (_isOneShot || _currentLogicalName != previous) yield break;
         Play(logicalName, blendSeconds);
     }
 

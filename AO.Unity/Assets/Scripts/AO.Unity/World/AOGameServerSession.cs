@@ -56,6 +56,8 @@ namespace AO.Unity.World
         [SerializeField] private float idleMovementHeartbeatSeconds = 1f;
 
         private IGameServerBackend _backend;
+        private PrototypeWorldBootstrap _movementWorldBootstrap;
+        private bool _awaitingNativeCoordinates;
         private CancellationTokenSource _lifetime;
         private CancellationTokenSource _worldUpdates;
         private Task _worldUpdateTask;
@@ -90,6 +92,11 @@ namespace AO.Unity.World
         private int _diagnosticOtherDeltas;
         private float _nextDiagnosticLogAt;
         private Transform _controlledPlayer;
+        private readonly Dictionary<string, string> _entityVisualModels = new();
+        private readonly Dictionary<string, GameObject> _entityVisualRoots = new();
+        private static string BodyVisualKey(NearbyEntity entity) =>
+            entity.MonsterData > 0 ? $"monster:{entity.MonsterData}" : $"body:{entity.Appearance}";
+
         private NearbyEntity _controlledAppearance;
         private NearbyEntity _controlledRawAppearance;
         private CharacterAppearanceSnapshot _controlledSourceAppearance;
@@ -184,11 +191,15 @@ namespace AO.Unity.World
 
         private void ApplyControlledAppearance(NearbyEntity entity)
         {
-            if (entity?.EquipmentAppearance == null) return;
+            if (entity == null) return;
+            _controlledPlayer?.GetComponent<CharacterAppearanceController>()?.SetServerBody(entity);
+            if (entity.EquipmentAppearance == null) return;
             _controlledRawAppearance = entity;
             CharacterAppearanceSnapshot sourceAppearance = entity.EquipmentAppearance;
             if (ReferenceEquals(_controlledSourceAppearance, sourceAppearance)
                 && _controlledSourceBody == entity.Appearance
+                && _controlledAppearance?.MonsterData == entity.MonsterData
+                && _controlledAppearance?.MonsterScale == entity.MonsterScale
                 && _appliedRightHandEquipped == _controlledRightHandEquipped
                 && _appliedLeftHandEquipped == _controlledLeftHandEquipped)
                 return;
@@ -206,9 +217,7 @@ namespace AO.Unity.World
                     .Select(value => $"{value.Position}:{value.TextureId}")) + ".");
             _controlledAppearance = entity;
             if (_controlledPlayer == null) return;
-            _controlledPlayer.GetComponent<CharacterAppearanceController>()?
-                .SetTemporaryMeshResourceOverride(
-                    ServerAppearanceVisualController.BodyMeshName(entity.Appearance));
+            _controlledPlayer.GetComponent<CharacterAppearanceController>()?.SetServerBody(entity);
             var renderer = _controlledPlayer.GetComponent<ServerAppearanceVisualController>()
                 ?? _controlledPlayer.gameObject.AddComponent<ServerAppearanceVisualController>();
             renderer.SetAppearance(entity);
@@ -292,6 +301,8 @@ namespace AO.Unity.World
         public event Action<DungeonLayout> ProceduralLayoutVerified;
         public InventorySnapshot CurrentInventory => _backend?.GetInventorySnapshot();
         public event Action<NanoEffectUpdate> NanoEffectChanged;
+        public event Action<IReadOnlyList<NanoEffectUpdate>> NanoEffectsRestored;
+        public event Action<int, int> EntityRemoved;
 
         private bool? _sentSitting;
         private async Task SynchronizePostureAsync()
@@ -310,24 +321,46 @@ namespace AO.Unity.World
 
         private void ApplyCombatUpdate(CombatUpdate combat)
         {
+            if (combat.TargetDied)
+                AO.Unity.Prototype.PrototypeUiContext.Active?.StopNativeAttackForTarget(combat.TargetType, combat.TargetInstance);
             bool self = combat.AttackerType == 50000 && combat.AttackerInstance.ToString() == CurrentCharacterId;
             GameObject actor = self ? _controlledPlayer?.gameObject : null;
             if (!self) _entityPlaceholders.TryGetValue(combat.AttackerType + ":" + combat.AttackerInstance, out actor);
             var appearance = actor?.GetComponent<CharacterAppearanceController>();
+            var remoteCat = !self && appearance == null ? actor?.GetComponentInChildren<CatAnimPlayer>(true) : null;
             if (combat.Kind == CombatUpdateKind.Started || combat.Kind == CombatUpdateKind.Stopped)
             {
                 if (self) AO.Unity.Prototype.PrototypeUiContext.Active?.ApplyServerAttackState(combat);
                 else appearance?.SetServerAttackActive(combat.Kind == CombatUpdateKind.Started);
+                if (remoteCat != null && actor.GetComponent<CharacterRuntimeBridge>()?.ServerEntity?.IsDead != true)
+                    remoteCat.Play(combat.Kind == CombatUpdateKind.Started ? "attack-idle" : "idle");
             }
             else
             {
                 appearance?.TryPlayServerWeaponHit(combat.SpecialStatId, combat.HandSlot);
+                if (remoteCat != null && actor.GetComponent<CharacterRuntimeBridge>()?.ServerEntity?.IsDead != true)
+                    remoteCat.PlayOnce("attack-hit", CatAnimPlayer.DefaultBlendSeconds, () =>
+                    {
+                        if (actor != null && remoteCat != null && actor.GetComponent<CharacterRuntimeBridge>()?.ServerEntity?.IsDead != true)
+                            remoteCat.Play("attack-idle");
+                    });
                 string attacker = self ? "You" : actor?.name ?? "An attacker";
                 _entityPlaceholders.TryGetValue(combat.TargetType + ":" + combat.TargetInstance, out var targetActor);
                 string target = combat.TargetInstance.ToString() == CurrentCharacterId ? "you" : targetActor?.name ?? "the target";
                 AO.Unity.AOStyle.ChatDamageWindowView.AppendDamageFeed(combat.Kind == CombatUpdateKind.Miss
                     ? $"{attacker} missed {target}." : $"{attacker} hit {target}{(combat.SpecialStatId > 0 ? " with " + AO.Unity.Prototype.PrototypeUiContext.GetSpecialName(combat.SpecialStatId) : string.Empty)} for {combat.Damage} damage.");
             }
+        }
+
+        private void ApplyNanoCastUpdate(NanoCastUpdate cast)
+        {
+            bool self = cast.CasterType == 50000 && cast.CasterInstance.ToString() == CurrentCharacterId;
+            GameObject actor = self ? _controlledPlayer?.gameObject : null;
+            if (!self) _entityPlaceholders.TryGetValue(EntityKey(cast.CasterType, cast.CasterInstance), out actor);
+            if (cast.Kind != NanoCastUpdateKind.Interrupted)
+                actor?.GetComponent<CharacterAppearanceController>()?.TryPlayOneShotClipByName(
+                    cast.Kind == NanoCastUpdateKind.Started ? "nano-cast-start" : "nano-cast-finish", out _);
+            if (self) AO.Unity.Prototype.PrototypeUiContext.Active?.ApplyServerNanoCast(cast);
         }
 
         public Task UseSpecialAttackAsync(int statId, int targetType, int targetInstance)
@@ -341,6 +374,13 @@ namespace AO.Unity.World
 
         public Task CastNanoAsync(int nanoId, int targetType, int targetInstance)
             => _backend.CastNanoAsync(nanoId, targetType, targetInstance, _lifetime.Token);
+
+        public Task UseWorldObjectAsync(int type, int instance)
+            => _backend.UseWorldObjectAsync(type, instance, _lifetime.Token);
+
+        public Task TakeCorpseLootAsync(int corpseInstance, int slot)
+            => _backend.MoveItemAsync(new ItemLocation(ItemArea.Backpack, slot, corpseInstance),
+                new ItemLocation(ItemArea.Inventory, 0), _lifetime.Token);
 
         public async Task UseItemAsync(ItemLocation location)
         {
@@ -488,8 +528,10 @@ namespace AO.Unity.World
         public void BeginPlayerMovement(Transform controlledPlayer)
         {
             _controlledPlayer = controlledPlayer;
+            _movementWorldBootstrap = FindFirstObjectByType<PrototypeWorldBootstrap>();
             _controlledPlayer?.GetComponent<PrototypeWalkerController>()
-                ?.SetLocalMovementEnabled(true);
+                ?.SetLocalMovementEnabled(!_awaitingNativeCoordinates
+                    && (_movementWorldBootstrap == null || !_movementWorldBootstrap.ActivePlayfieldGlbLoadInProgress));
             if (_pendingProceduralBootstrap != null || _awaitingProceduralCollision)
             {
                 PrototypeWalkerController walker = _controlledPlayer?.GetComponent<PrototypeWalkerController>();
@@ -508,9 +550,12 @@ namespace AO.Unity.World
 
         public void SetWorldOriginOffset(Vector3 worldPosition)
         {
+            Vector3 shift = worldPosition - _worldOriginOffset;
             _worldOriginOffset = worldPosition;
             if (_placeholderRoot != null)
                 _placeholderRoot.position = worldPosition;
+            foreach (string key in _entityMovementTargets.Keys.ToArray()) _entityMovementTargets[key] += shift;
+            foreach (string key in _remoteMovementTargets.Keys.ToArray()) _remoteMovementTargets[key] += shift;
         }
 
         public void RebaseWorldOrigin(Vector3 aoPosition)
@@ -545,6 +590,8 @@ namespace AO.Unity.World
         private void TrySendPlayerMovement()
         {
             if (_pendingProceduralBootstrap != null || _awaitingProceduralCollision
+                || _awaitingNativeCoordinates
+                || (_movementWorldBootstrap != null && _movementWorldBootstrap.ActivePlayfieldGlbLoadInProgress)
                 || _controlledPlayer == null || _worldOrigin == null || _movementSendPending
                 || _backend == null || _backend.State != ClientConnectionState.InWorld
                 || Time.realtimeSinceStartup < _nextMovementSendAt)
@@ -770,6 +817,8 @@ namespace AO.Unity.World
             foreach (object importer in _entityVisualImporters.Values)
                 PrototypeWorldBootstrap.DisposeImporter(importer);
             _entityVisualImporters.Clear();
+            _entityVisualModels.Clear();
+            _entityVisualRoots.Clear();
             foreach (object importer in _npcTemplateImporters)
                 PrototypeWorldBootstrap.DisposeImporter(importer);
             _npcTemplateImporters.Clear();
@@ -782,6 +831,8 @@ namespace AO.Unity.World
             _entityVisualLoads.Clear();
             _entityRemovalVersions.Clear();
             _placeholderRoot = new GameObject("AO Network Placeholders").transform;
+            _worldOriginOffset = Vector3.zero;
+            _awaitingNativeCoordinates = false;
             _worldOrigin = bootstrap;
             _sentSitting = null;
             _entityPlaceholders.Clear();
@@ -821,6 +872,13 @@ namespace AO.Unity.World
 
             foreach (WorldObject worldObject in objects.Where(item => item.HasPosition))
             {
+                if (worldObject.CorpseAppearance != null)
+                {
+                    UpsertEntityPlaceholder(worldObject.CorpseAppearance);
+                    if (_entityPlaceholders.TryGetValue(EntityKey(worldObject.IdentityType, worldObject.IdentityInstance), out var corpseActor))
+                        corpseActor.transform.rotation = new Quaternion(worldObject.HeadingX, worldObject.HeadingY, worldObject.HeadingZ, worldObject.HeadingW).normalized;
+                    continue;
+                }
                 GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 marker.name = $"{worldObject.Kind} {worldObject.Name}";
                 marker.transform.SetParent(_placeholderRoot, false);
@@ -897,6 +955,14 @@ namespace AO.Unity.World
                         if (!_diagnosticPacketSamples.ContainsKey(packetSample.Key))
                             _diagnosticPacketSamples[packetSample.Key] = packetSample.Value;
                     }
+                    CharacterStateSnapshot characterState = _backend.GetCharacterStateSnapshot();
+                    if (characterState != null
+                        && !ReferenceEquals(characterState, _lastDeliveredCharacterState))
+                    {
+                        _lastDeliveredCharacterState = characterState;
+                        ReconcileControlledEquipment(characterState);
+                        CharacterStateChanged?.Invoke(characterState);
+                    }
                     foreach (WorldEntityDelta delta in batch.Deltas)
                     {
                         if (delta.Kind == WorldEntityDeltaKind.Movement)
@@ -913,6 +979,8 @@ namespace AO.Unity.World
                         InventoryChanged?.Invoke(container);
                     foreach (var cooldown in batch.SpecialCooldowns) AO.Unity.Prototype.PrototypeUiContext.Active?.ApplyServerSpecialCooldown(cooldown);
                     foreach (var combat in batch.CombatUpdates) ApplyCombatUpdate(combat);
+                    foreach (var cast in batch.NanoCasts) ApplyNanoCastUpdate(cast);
+                    if (batch.NanoEffectSnapshot != null) NanoEffectsRestored?.Invoke(batch.NanoEffectSnapshot);
                     foreach (var effect in batch.NanoEffects) NanoEffectChanged?.Invoke(effect);
                     foreach (string serverMessage in batch.ServerMessages)
                     {
@@ -925,14 +993,6 @@ namespace AO.Unity.World
                         Debug.Log("[AO.Server] " + serverMessage);
                         AO.Unity.Prototype.PrototypeUiContext.Active?.ApplyServerSpecialLockNotice(serverMessage);
                         AO.Unity.Prototype.PrototypeUiContext.Active?.PublishStatus(serverMessage);
-                    }
-                    CharacterStateSnapshot characterState = _backend.GetCharacterStateSnapshot();
-                    if (characterState != null
-                        && !ReferenceEquals(characterState, _lastDeliveredCharacterState))
-                    {
-                        _lastDeliveredCharacterState = characterState;
-                        ReconcileControlledEquipment(characterState);
-                        CharacterStateChanged?.Invoke(characterState);
                     }
                     LogWorldUpdateDiagnosticsIfDue();
                     await Task.Yield();
@@ -1051,9 +1111,31 @@ namespace AO.Unity.World
                 : Vector3.zero);
             SetTemporaryFloorVisible(!transitioned);
             BeginPlayerMovement(_controlledPlayer);
+            if (transitioned && !procedural && world != null && world.ActivePlayfieldGlbLoadInProgress)
+            {
+                _awaitingNativeCoordinates = true;
+                StartCoroutine(FinalizeNativeZoneCoordinates(world, bootstrap, destination));
+            }
             AO.Unity.Prototype.PrototypeUiContext.Active?.PublishStatus(
                 $"Entered playfield {bootstrap.PlayfieldId} at "
                 + $"({bootstrap.X:F2}, {bootstrap.Y:F2}, {bootstrap.Z:F2}).");
+        }
+
+        private System.Collections.IEnumerator FinalizeNativeZoneCoordinates(
+            PrototypeWorldBootstrap world, WorldBootstrapResult bootstrap, Vector3 destination)
+        {
+            while (world != null && world.ActivePlayfieldGlbLoadInProgress)
+            {
+                if (!ReferenceEquals(_worldOrigin, bootstrap)) yield break;
+                yield return null;
+            }
+            if (world == null || !ReferenceEquals(_worldOrigin, bootstrap)
+                || world.ActivePlayfieldId != bootstrap.PlayfieldId) yield break;
+            // Outdoor loading can recenter the root. Apply its final AO/world mapping
+            // before sending movement or positioning nearby entities.
+            SetWorldOriginOffset(world.ConvertAoToWorld(destination));
+            _awaitingNativeCoordinates = false;
+            BeginPlayerMovement(_controlledPlayer);
         }
 
         private void TryCompleteProceduralSpawn()
@@ -1349,6 +1431,8 @@ namespace AO.Unity.World
             }
             if (delta.Kind == WorldEntityDeltaKind.Remove)
             {
+                EntityRemoved?.Invoke(delta.IdentityType, delta.IdentityInstance);
+                AO.Unity.Prototype.PrototypeUiContext.Active?.StopNativeAttackForTarget(delta.IdentityType, delta.IdentityInstance);
                 int version = _entityRemovalVersions.TryGetValue(key, out int previousVersion)
                     ? previousVersion + 1 : 1;
                 _entityRemovalVersions[key] = version;
@@ -1362,6 +1446,8 @@ namespace AO.Unity.World
             }
 
             if (delta.Entity == null) return;
+            if (delta.Entity.IsDead)
+                AO.Unity.Prototype.PrototypeUiContext.Active?.StopNativeAttackForTarget(delta.IdentityType, delta.IdentityInstance);
             if (IsSelectedCharacter(delta.Entity))
             {
                 ApplyControlledAppearance(delta.Entity);
@@ -1414,6 +1500,9 @@ namespace AO.Unity.World
             bool setPositionImmediately = delta.Kind == WorldEntityDeltaKind.Upsert
                 || !alreadyRendered;
             UpsertEntityPlaceholder(delta.Entity, setPositionImmediately);
+            if (delta.Kind == WorldEntityDeltaKind.Upsert && delta.HasHeading
+                && _entityPlaceholders.TryGetValue(key, out var headingActor))
+                headingActor.transform.rotation = new Quaternion(delta.HeadingX, delta.HeadingY, delta.HeadingZ, delta.HeadingW).normalized;
             if (delta.Kind == WorldEntityDeltaKind.Movement && delta.HasMovementTarget)
             {
                 _remoteMovementTargets.Remove(key);
@@ -1463,6 +1552,8 @@ namespace AO.Unity.World
                 if (_entityVisualImporters.TryGetValue(key, out object importer))
                     PrototypeWorldBootstrap.DisposeImporter(importer);
                 _entityVisualImporters.Remove(key);
+                _entityVisualModels.Remove(key);
+                _entityVisualRoots.Remove(key);
                 _entityPlaceholders.Remove(key);
                 // Keep an in-flight load registered until its own finally block. This
                 // prevents a later respawn from overlapping the abandoned import.
@@ -1549,6 +1640,24 @@ namespace AO.Unity.World
             var bridge = actor.GetComponent<CharacterRuntimeBridge>()
                 ?? actor.AddComponent<CharacterRuntimeBridge>();
             bridge.SetServerEntity(entity);
+            if (entity.IsCorpse && actor.TryGetComponent<CapsuleCollider>(out var corpseCollider))
+            {
+                corpseCollider.height = 0.65f;
+                corpseCollider.radius = 0.45f;
+                corpseCollider.center = new Vector3(0, 0.325f, 0);
+            }
+            if (entity.IsCorpse && _entityPlaceholders.TryGetValue(
+                EntityKey(entity.CorpseSourceType, entity.CorpseSourceInstance), out var livingActor) && livingActor != null)
+                livingActor.SetActive(false);
+            var combatState = actor.GetComponent<RuntimeDynelCombatState>() ?? actor.AddComponent<RuntimeDynelCombatState>();
+            if (entity.Health > 0) combatState.SetAuthoritativeHealth(Mathf.Max(0, entity.Health - entity.HealthDamage), entity.Health);
+            if (entity.IsDead)
+            {
+                _entityMovementTargets.Remove(key);
+                _remoteMovementTargets.Remove(key);
+                _remoteMovementVelocities.Remove(key);
+                _remoteMotionStates.Remove(key);
+            }
 
             if (entity.EquipmentAppearance != null)
             {
@@ -1557,8 +1666,11 @@ namespace AO.Unity.World
                 appearance.SetAppearance(entity);
             }
 
+            bool hasVisual = _entityVisualModels.TryGetValue(key, out string model) && model == BodyVisualKey(entity);
+            if (hasVisual && _entityVisualRoots.TryGetValue(key, out var root) && root != null)
+                root.transform.localScale = Vector3.one * (entity.MonsterScale > 0 ? entity.MonsterScale / 100f : 1f);
             if ((entity.Kind == NearbyEntityKind.Player || entity.MonsterData > 0)
-                && !_entityVisualImporters.ContainsKey(key) && _entityVisualLoads.Add(key))
+                && !hasVisual && _entityVisualLoads.Add(key))
                 _ = LoadNpcVisualAsync(key, actor, entity);
 
             actor.name = $"{entity.Kind} {entity.Name} ({key})";
@@ -1599,7 +1711,7 @@ namespace AO.Unity.World
                     || current != actor)
                     return;
 
-                if (entity.Kind == NearbyEntityKind.Player)
+                if (entity.Kind == NearbyEntityKind.Player && entity.MonsterData == 0)
                 {
                     visual = await DirectCatMeshRuntime.InstantiateAsync(
                         ServerAppearanceVisualController.BodyMeshName(entity.Appearance), actor.transform);
@@ -1677,6 +1789,18 @@ namespace AO.Unity.World
                 if (meshRenderer == null)
                     return;
 
+                var latest = actor.GetComponent<CharacterRuntimeBridge>()?.ServerEntity;
+                if (latest == null || BodyVisualKey(latest) != BodyVisualKey(entity)) return;
+                scale = latest.MonsterScale > 0 ? latest.MonsterScale / 100f : 1f;
+                if (_entityVisualRoots.TryGetValue(key, out var oldRoot) && oldRoot != null)
+                {
+                    oldRoot.SetActive(false);
+                    Destroy(oldRoot);
+                }
+                if (_entityVisualImporters.TryGetValue(key, out var oldImporter))
+                    PrototypeWorldBootstrap.DisposeImporter(oldImporter);
+                _entityVisualRoots[key] = visual;
+                _entityVisualModels[key] = BodyVisualKey(entity);
                 visual.name = $"MonsterData_{entity.MonsterData}";
                 visual.transform.SetParent(actor.transform, false);
                 visual.transform.localPosition = Vector3.zero;
@@ -1693,6 +1817,7 @@ namespace AO.Unity.World
                 var appearanceRenderer = actor.GetComponent<ServerAppearanceVisualController>()
                     ?? actor.AddComponent<ServerAppearanceVisualController>();
                 appearanceRenderer.SetVisual(visual.transform);
+                if (latest.IsDead) actor.GetComponent<RuntimeDynelCombatState>()?.OnServerVisualReady();
                 // A later appearance update may have arrived while the body was loading.
                 if (!appearanceRenderer.HasAppearance) appearanceRenderer.SetAppearance(entity);
                 importer = null;
@@ -1721,10 +1846,14 @@ namespace AO.Unity.World
                 // If the identity respawned while this import was finishing, start one
                 // replacement load for the current actor now that the guard is released.
                 if (_entityPlaceholders.TryGetValue(key, out GameObject currentActor)
-                    && currentActor != null && currentActor != actor
-                    && !_entityVisualImporters.ContainsKey(key)
-                    && _entityVisualLoads.Add(key))
-                    _ = LoadNpcVisualAsync(key, currentActor, entity);
+                    && currentActor != null)
+                {
+                    var latest = currentActor.GetComponent<CharacterRuntimeBridge>()?.ServerEntity;
+                    bool stale = latest != null && BodyVisualKey(latest) != BodyVisualKey(entity);
+                    if (latest != null && (currentActor != actor || stale)
+                        && _entityVisualLoads.Add(key))
+                        _ = LoadNpcVisualAsync(key, currentActor, latest);
+                }
             }
         }
 
@@ -1764,7 +1893,7 @@ namespace AO.Unity.World
         {
             return origin != null && origin.PlayfieldId >= 900000
                 ? new Vector3(x, y, z)
-                : ToRelativeUnityPosition(x, y, z, origin);
+                : ToRelativeUnityPosition(x, y, z, origin) + _worldOriginOffset;
         }
 
         private static void AddLabel(Transform parent, string value, float height)
@@ -1809,7 +1938,10 @@ namespace AO.Unity.World
             _controlledRightHandEquipped = null;
             _controlledLeftHandEquipped = null;
             if (_controlledPlayer != null)
+            {
+                _controlledPlayer.GetComponent<CharacterAppearanceController>()?.ClearServerBody();
                 _controlledPlayer.GetComponent<ServerAppearanceVisualController>()?.ClearAppearance();
+            }
             _worldUpdates?.Cancel();
             Task worldUpdateTask = _worldUpdateTask;
             if (worldUpdateTask != null)
@@ -1860,6 +1992,8 @@ namespace AO.Unity.World
             foreach (object importer in _entityVisualImporters.Values)
                 PrototypeWorldBootstrap.DisposeImporter(importer);
             _entityVisualImporters.Clear();
+            _entityVisualModels.Clear();
+            _entityVisualRoots.Clear();
             _entityVisualLoads.Clear();
             try
             {

@@ -160,8 +160,12 @@ namespace AO.Unity.Prototype
             _context.ServerSession = _gameServerSession;
             _gameServerSession.NanoEffectChanged -= HandleServerNanoEffect;
             _gameServerSession.NanoEffectChanged += HandleServerNanoEffect;
+            _gameServerSession.NanoEffectsRestored -= HandleServerNanoSnapshot;
+            _gameServerSession.NanoEffectsRestored += HandleServerNanoSnapshot;
             _gameServerSession.InventoryChanged -= HandleServerInventoryChanged;
             _gameServerSession.InventoryChanged += HandleServerInventoryChanged;
+            _gameServerSession.EntityRemoved -= HandleNativeEntityRemoved;
+            _gameServerSession.EntityRemoved += HandleNativeEntityRemoved;
             _gameServerSession.CharacterStateChanged -= HandleServerCharacterStateChanged;
             _gameServerSession.CharacterStateChanged += HandleServerCharacterStateChanged;
             // The session can finish its initial snapshot before this view subscribes.
@@ -173,10 +177,16 @@ namespace AO.Unity.Prototype
         }
 
         private void HandleServerNanoEffect(NanoEffectUpdate effect) => _context?.ApplyServerNanoEffect(effect);
+        private void HandleServerNanoSnapshot(IReadOnlyList<NanoEffectUpdate> effects) => _context?.RestoreServerNanoEffects(effects);
 
         private void HandleServerInventoryChanged(InventorySnapshot snapshot)
         {
             if (snapshot == null) return;
+            if (snapshot.ContainerType == 51050)
+            {
+                ApplyNativeCorpseInventory(snapshot);
+                return;
+            }
             _context?.ApplyServerInventory(snapshot);
         }
 

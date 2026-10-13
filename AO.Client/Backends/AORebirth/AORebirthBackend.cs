@@ -109,7 +109,10 @@ namespace AO.Client.Backends.AORebirth
         private readonly Dictionary<int, InventorySnapshot> _containerInventories = new();
         private readonly List<InventorySnapshot> _changedContainerInventories = new();
         private readonly List<NanoEffectUpdate> _nanoEffects = new();
+        private IReadOnlyList<NanoEffectUpdate> _nanoEffectSnapshot;
+        private readonly List<NanoCastUpdate> _nanoCasts = new();
         private readonly List<CombatUpdate> _combatUpdates = new();
+        private readonly Dictionary<string, (int Type, int Instance)> _combatTargets = new();
         private readonly List<SpecialCooldownUpdate> _specialCooldowns = new();
         private readonly SemaphoreSlim _itemUseGate = new(1, 1);
         private TaskCompletionSource<int> _itemUseReply;
@@ -167,7 +170,7 @@ namespace AO.Client.Backends.AORebirth
 
             await CloseTransportAsync().ConfigureAwait(false);
             _inventory = null;
-            _nanoEffects.Clear(); _combatUpdates.Clear(); _specialCooldowns.Clear();
+            _nanoEffects.Clear(); _nanoEffectSnapshot = null; _nanoCasts.Clear(); _combatUpdates.Clear(); _combatTargets.Clear(); _specialCooldowns.Clear();
             _containerInventories.Clear();
             _changedContainerInventories.Clear();
             _characterState = null;
@@ -567,6 +570,7 @@ namespace AO.Client.Backends.AORebirth
                              + ":" + entity.IdentityInstance.ToString(CultureInfo.InvariantCulture);
                 entities[key] = entity;
                 _worldEntities[key] = entity;
+                CaptureActiveNanos(entity);
                 ResolveLinkedObjectPositions(entity);
             }
 
@@ -597,7 +601,16 @@ namespace AO.Client.Backends.AORebirth
             if (State != ClientConnectionState.InWorld || _selectedCharacter == null)
                 throw new InvalidOperationException("Enter the world before moving items.");
             int characterId = int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture);
-            await WritePacketAsync(AORebirthProtocol.CreateItemMove(characterId, source, destination),
+            byte[] request;
+            if (source.Area == ItemArea.Backpack && destination.Area == ItemArea.Inventory)
+            {
+                var container = GetContainerInventorySnapshot(source.ContainerInstance);
+                if (container == null || container.ContainerType != 51050)
+                    throw new InvalidOperationException("Open the corpse before taking loot.");
+                request = AORebirthProtocol.CreateLootTake(characterId, container.MainInventorySlot, source.Index);
+            }
+            else request = AORebirthProtocol.CreateItemMove(characterId, source, destination);
+            await WritePacketAsync(request,
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -720,7 +733,7 @@ namespace AO.Client.Backends.AORebirth
             return new WorldDeltaBatch(deltas, new List<NearbyEntity>(_worldEntities.Values),
                 packetsObserved, movementPacketsObserved, unmatchedMovementPackets,
                 packetKindsObserved, packetSamplesObserved, inventory, serverMessages,
-                zoneTransfer, DrainContainerUpdates(), DrainNanoEffects(), DrainCombatUpdates(), DrainSpecialCooldowns());
+                zoneTransfer, DrainContainerUpdates(), DrainNanoEffects(), DrainCombatUpdates(), DrainSpecialCooldowns(), DrainNanoCasts(), DrainNanoEffectSnapshot());
         }
 
         private async Task<WorldBootstrapResult> ReconnectToZoneAsync(IPAddress address,
@@ -758,7 +771,7 @@ namespace AO.Client.Backends.AORebirth
             await WritePacketAsync(AORebirthProtocol.CreateCharInPlay(characterId),
                 cancellationToken).ConfigureAwait(false);
             _sentInPlay = true;
-            _nanoEffects.Clear(); _combatUpdates.Clear(); _specialCooldowns.Clear();
+            _nanoEffects.Clear(); _nanoEffectSnapshot = null; _nanoCasts.Clear(); _combatUpdates.Clear(); _combatTargets.Clear(); _specialCooldowns.Clear();
             _containerInventories.Clear();
             _changedContainerInventories.Clear();
             _worldEntities.Clear();
@@ -767,6 +780,15 @@ namespace AO.Client.Backends.AORebirth
         }
 
         public InventorySnapshot GetInventorySnapshot() => _inventory;
+
+        public Task UseWorldObjectAsync(int identityType, int identityInstance, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null)
+                throw new InvalidOperationException("Enter the world before using world objects.");
+            return WritePacketAsync(AORebirthProtocol.CreateWorldObjectUse(
+                int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture), identityType, identityInstance), cancellationToken);
+        }
 
         public InventorySnapshot GetContainerInventorySnapshot(int containerInstance)
             => _containerInventories.TryGetValue(containerInstance, out var snapshot) ? snapshot : null;
@@ -887,6 +909,27 @@ namespace AO.Client.Backends.AORebirth
             var effects = _nanoEffects.ToArray(); _nanoEffects.Clear(); return effects;
         }
 
+        private void CaptureActiveNanos(NearbyEntity entity)
+        {
+            if (entity.ActiveNanos == null || entity.IdentityType != 50000
+                || _selectedCharacter?.Id != entity.IdentityInstance.ToString(CultureInfo.InvariantCulture)) return;
+            _nanoEffectSnapshot = entity.ActiveNanos;
+            // The full snapshot supersedes earlier incremental updates in this batch.
+            _nanoEffects.Clear();
+        }
+
+        private IReadOnlyList<NanoEffectUpdate> DrainNanoEffectSnapshot()
+        {
+            var snapshot = _nanoEffectSnapshot;
+            _nanoEffectSnapshot = null;
+            return snapshot;
+        }
+
+        private IReadOnlyList<NanoCastUpdate> DrainNanoCasts()
+        {
+            var casts = _nanoCasts.ToArray(); _nanoCasts.Clear(); return casts;
+        }
+
         private IReadOnlyList<CombatUpdate> DrainCombatUpdates()
         {
             var updates = _combatUpdates.ToArray(); _combatUpdates.Clear(); return updates;
@@ -944,7 +987,7 @@ namespace AO.Client.Backends.AORebirth
             if (AORebirthProtocol.TryReadInventoryUpdate(packet, out InventorySnapshot snapshot))
             {
                 if (snapshot.IsMainInventory) { _inventory = snapshot; _inventoryChanged = true; }
-                else if (snapshot.ContainerType == 51017 && snapshot.ContainerInstance > 0)
+                else if ((snapshot.ContainerType == 51017 || snapshot.ContainerType == 51050) && snapshot.ContainerInstance > 0)
                 {
                     _containerInventories[snapshot.ContainerInstance] = snapshot;
                     _changedContainerInventories.Add(snapshot);
@@ -960,8 +1003,18 @@ namespace AO.Client.Backends.AORebirth
         private void ApplyWorldPacket(AORebirthPacket packet, List<WorldEntityDelta> deltas,
             ref int movementPacketsObserved, ref int unmatchedMovementPackets)
         {
+            if (AORebirthProtocol.TryReadNanoCastUpdate(packet, out var cast)) _nanoCasts.Add(cast);
             if (AORebirthProtocol.TryReadCombatUpdate(packet, out var combat))
             {
+                string attackerKey = EntityKey(combat.AttackerType, combat.AttackerInstance);
+                if (combat.Kind == CombatUpdateKind.Started)
+                    _combatTargets[attackerKey] = (combat.TargetType, combat.TargetInstance);
+                else if (combat.Kind == CombatUpdateKind.Stopped && _combatTargets.TryGetValue(attackerKey, out var stoppedTarget))
+                {
+                    combat = new CombatUpdate(CombatUpdateKind.Stopped, combat.AttackerType, combat.AttackerInstance,
+                        stoppedTarget.Type, stoppedTarget.Instance);
+                    _combatTargets.Remove(attackerKey);
+                }
                 _combatUpdates.Add(combat);
                 if (combat.Kind == CombatUpdateKind.Hit)
                 {
@@ -970,7 +1023,7 @@ namespace AO.Client.Backends.AORebirth
                         && _characterState.Stats.TryGetValue(27, out int currentSelfHealth))
                     {
                         var stats = new Dictionary<int, int>(_characterState.Stats);
-                        stats[27] = Math.Max(0, currentSelfHealth - combat.Damage);
+                        stats[27] = combat.TargetDied ? 0 : Math.Max(0, currentSelfHealth - combat.Damage);
                         _characterState = new CharacterStateSnapshot(_characterState.Slots,
                             _characterState.UploadedNanoIds, stats, isStatUpdateOnly: true,
                             equipmentRevision: _characterState.EquipmentRevision);
@@ -979,7 +1032,7 @@ namespace AO.Client.Backends.AORebirth
                     if (_worldEntities.TryGetValue(targetKey, out var target))
                     {
                         var changed = target.WithHealth(target.Health,
-                            Math.Max(0, target.Health - target.HealthDamage - combat.Damage));
+                            combat.TargetDied ? 0 : Math.Max(0, target.Health - target.HealthDamage - combat.Damage));
                         _worldEntities[targetKey] = changed;
                         deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Stats,
                             combat.TargetType, combat.TargetInstance, changed));
@@ -1006,6 +1059,7 @@ namespace AO.Client.Backends.AORebirth
             }
             if (AORebirthProtocol.TryReadNearbyEntity(packet, _currentPlayfieldId, out NearbyEntity spawned))
             {
+                CaptureActiveNanos(spawned);
                 string key = EntityKey(spawned.IdentityType, spawned.IdentityInstance);
                 if (_worldEntities.TryGetValue(key, out var previous) && previous.EquipmentAppearance != null)
                     spawned = spawned.WithEquipmentAppearance(spawned.EquipmentAppearance == null
@@ -1033,6 +1087,21 @@ namespace AO.Client.Backends.AORebirth
             if (AORebirthProtocol.TryReadWorldObject(packet, _currentPlayfieldId, out WorldObject worldObject))
             {
                 StoreWorldObject(worldObject);
+                if (worldObject.CorpseAppearance != null)
+                {
+                    var corpse = worldObject.CorpseAppearance;
+                    _worldEntities[EntityKey(corpse.IdentityType, corpse.IdentityInstance)] = corpse;
+                    deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Upsert, corpse.IdentityType, corpse.IdentityInstance, corpse,
+                        hasHeading: true, headingX: worldObject.HeadingX, headingY: worldObject.HeadingY,
+                        headingZ: worldObject.HeadingZ, headingW: worldObject.HeadingW));
+                    string sourceKey = EntityKey(corpse.CorpseSourceType, corpse.CorpseSourceInstance);
+                    if (_worldEntities.TryGetValue(sourceKey, out var source))
+                    {
+                        var dead = source.WithHealth(Math.Max(1, source.Health), 0);
+                        _worldEntities[sourceKey] = dead;
+                        deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Stats, source.IdentityType, source.IdentityInstance, dead));
+                    }
+                }
                 return;
             }
             if (AORebirthProtocol.TryReadMovement(packet, out AORebirthMovement movement)
@@ -1060,15 +1129,19 @@ namespace AO.Client.Backends.AORebirth
                 return;
             }
             if (AORebirthProtocol.TryReadStatUpdate(packet, out AORebirthStatUpdate visualStats)
-                && (visualStats.Values.ContainsKey(64) || visualStats.Values.ContainsKey(673)))
+                && (visualStats.Values.ContainsKey(64) || visualStats.Values.ContainsKey(673)
+                    || visualStats.Values.ContainsKey(359) || visualStats.Values.ContainsKey(360)))
             {
                 string key = EntityKey(visualStats.Type, visualStats.Instance);
-                if (_worldEntities.TryGetValue(key, out NearbyEntity current) && current.EquipmentAppearance != null)
+                if (_worldEntities.TryGetValue(key, out NearbyEntity current))
                 {
                     var outfit = current.EquipmentAppearance;
-                    int? head = visualStats.Values.TryGetValue(64, out int newHead) ? newHead : outfit.HeadMeshId;
-                    int flags = visualStats.Values.TryGetValue(673, out int newFlags) ? newFlags : outfit.VisualFlags;
-                    var changed = current.WithEquipmentAppearance(new CharacterAppearanceSnapshot(outfit.Textures, outfit.Meshes, flags, head));
+                    int? head = visualStats.Values.TryGetValue(64, out int newHead) ? newHead : outfit?.HeadMeshId;
+                    int flags = visualStats.Values.TryGetValue(673, out int newFlags) ? newFlags : current.VisualFlags;
+                    uint monster = visualStats.Values.TryGetValue(359, out int model) ? unchecked((uint)model) : current.MonsterData;
+                    int scale = visualStats.Values.TryGetValue(360, out int newScale) ? newScale : current.MonsterScale;
+                    var changed = current.WithVisualStats(monster, scale,
+                        outfit == null ? null : new CharacterAppearanceSnapshot(outfit.Textures, outfit.Meshes, flags, head));
                     _worldEntities[key] = changed;
                     deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Appearance, visualStats.Type, visualStats.Instance, changed));
                 }
@@ -1091,6 +1164,8 @@ namespace AO.Client.Backends.AORebirth
             {
                 string key = EntityKey(removed.Type, removed.Instance);
                 _worldEntities.Remove(key);
+                _worldObjects.Remove(key);
+                _containerInventories.Remove(removed.Instance);
                 deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Remove,
                     removed.Type, removed.Instance, null));
             }
@@ -1139,7 +1214,7 @@ namespace AO.Client.Backends.AORebirth
             _selectedCharacter = null;
             _currentPlayfieldId = 0;
             _bootstrapServerMessages.Clear();
-            _nanoEffects.Clear(); _combatUpdates.Clear(); _specialCooldowns.Clear();
+            _nanoEffects.Clear(); _nanoEffectSnapshot = null; _nanoCasts.Clear(); _combatUpdates.Clear(); _combatTargets.Clear(); _specialCooldowns.Clear();
             _containerInventories.Clear();
             _changedContainerInventories.Clear();
             _worldEntities.Clear();
@@ -1163,7 +1238,7 @@ namespace AO.Client.Backends.AORebirth
             _selectedCharacter = null;
             _currentPlayfieldId = 0;
             _bootstrapServerMessages.Clear();
-            _nanoEffects.Clear(); _combatUpdates.Clear(); _specialCooldowns.Clear();
+            _nanoEffects.Clear(); _nanoEffectSnapshot = null; _nanoCasts.Clear(); _combatUpdates.Clear(); _combatTargets.Clear(); _specialCooldowns.Clear();
             _containerInventories.Clear();
             _changedContainerInventories.Clear();
             _worldEntities.Clear();

@@ -7,6 +7,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="AO.Client.WorldDelta.Tests.cs" />
+    <Compile Include="AO.Client.CapturedGameplay.Tests.cs" />
+    <None Include="Fixtures/Captures/*.tsv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures/Combat/*.tsv" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../AO.Client/AO.Client.csproj" />
   </ItemGroup>
 </Project>

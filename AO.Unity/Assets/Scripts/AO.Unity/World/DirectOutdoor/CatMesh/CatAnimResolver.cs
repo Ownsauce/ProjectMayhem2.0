@@ -65,6 +65,34 @@ public sealed class CatAnimResolver
             ? variant
             : DummyAnimSetVariants[0];
 
+        if (action == "death")
+        {
+            foreach (int candidate in candidates)
+            {
+                string name = GetAnimName(candidate);
+                if (name == null || (!name.Contains("die") && !name.Contains("death"))) continue;
+                animId = candidate; resolvedName = name;
+                return true;
+            }
+            return false;
+        }
+        bool creature = monsterDataId > 0 && string.IsNullOrEmpty(_animationProfile);
+        if (creature && (action.StartsWith("attack-", StringComparison.Ordinal)
+            || action.StartsWith("special-", StringComparison.Ordinal) || action.StartsWith("nano-cast-", StringComparison.Ordinal)))
+        {
+            bool idle = action == "attack-idle" || action == "attack-stop";
+            foreach (int candidate in candidates)
+            {
+                string name = GetAnimName(candidate);
+                if (name == null) continue;
+                bool match = idle ? name.Contains("idle")
+                    : name.Contains("attack") || name.Contains("hit") || name.Contains("fight") || name.Contains("strike");
+                if (!match) continue;
+                animId = candidate; resolvedName = name;
+                return true;
+            }
+            return false;
+        }
         if (TryResolveSitSemantic(action, candidates, preferredVariant, out animId, out resolvedName)
             || TryResolveJumpSemantic(action, candidates, preferredVariant, out animId, out resolvedName)
             || TryResolveNanoSemantic(action, candidates, out animId, out resolvedName)
@@ -264,7 +292,9 @@ public sealed class CatAnimResolver
         if (trimmed.Contains("spell-self") || trimmed.Contains("spell_self"))
             return "nano-cast-start";
         if (trimmed.StartsWith("attack-", StringComparison.Ordinal)
-            || trimmed.StartsWith("special-", StringComparison.Ordinal)) return trimmed;
+            || trimmed.StartsWith("special-", StringComparison.Ordinal)
+            || trimmed.StartsWith("nano-cast-", StringComparison.Ordinal)) return trimmed;
+        if (trimmed == "death" || trimmed == "die") return "death";
         return trimmed switch
         {
             "idle" => "idle",

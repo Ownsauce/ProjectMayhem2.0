@@ -44,7 +44,9 @@ public sealed class StatelParser
             Debug.LogError("StatelParser: ResourceDatabase is not initialized.");
             yield break;
         }
-        yield return BuildPlacementsCoroutine(playfieldId, parent, ParsePlacements(playfieldId));
+        var placements = ParsePlacements(playfieldId);
+        placements.AddRange(ParsePlacedDynels(playfieldId));
+        yield return BuildPlacementsCoroutine(playfieldId, parent, placements);
     }
 
     public IEnumerator BuildIndoorCoroutine(AOPlayfieldDefinition definition, Transform parent, ISet<int> selectedRooms = null)
@@ -76,6 +78,8 @@ public sealed class StatelParser
                 TextureOverrides = entry.TextureOverrides
             });
         }
+        if (selectedRooms == null || selectedRooms.Count == definition.RoomCount)
+            placements.AddRange(ParsePlacedDynels(definition.Id));
         return BuildPlacementsCoroutine(definition.Id, parent, placements);
     }
 
@@ -163,6 +167,15 @@ public sealed class StatelParser
         go.transform.SetParent(parent, false);
         go.transform.localPosition = placement.Position;
         go.transform.localRotation = placement.Rotation;
+        if (placement.IdentityType != 0)
+        {
+            var dynel = go.AddComponent<NativePlacedDynel>();
+            dynel.IdentityType = placement.IdentityType;
+            dynel.IdentityInstance = placement.IdentityInstance;
+            dynel.TemplateId = placement.TemplateId;
+            dynel.DisplayName = placement.DisplayName;
+            go.name = $"{placement.DisplayName} ({placement.IdentityType}:{placement.IdentityInstance})";
+        }
         // Sheared: slant baked into verts; packed scale applied on X only.
         // Non-sheared: uniform XYZ scale.
         go.transform.localScale = placement.Transform.Sheared
@@ -187,6 +200,10 @@ public sealed class StatelParser
 
             var filter = subGo.AddComponent<MeshFilter>();
             filter.sharedMesh = mesh;
+            // Native props need collision indoors too, where GLB finalization never runs.
+            // Portal doors remain walk-in volumes handled by the server.
+            if (placement.IdentityType != 51016)
+                subGo.AddComponent<MeshCollider>().sharedMesh = mesh;
 
             var renderer = subGo.AddComponent<MeshRenderer>();
             AbiffMaterialDesc material = sub.Material;
@@ -257,7 +274,7 @@ public sealed class StatelParser
             {
                 meshes[i] = AbiffMeshFactory.CreateUnityMesh(
                     kvp.Value[i],
-                    $"Statel_{kvp.Key.MeshId}_{kvp.Key.ShearBits}_{i}");
+                    $"Statel_{kvp.Key.MeshId}_{kvp.Key.ShearBits}_{i}", keepReadable: true);
             }
 
             _unityMeshCache[kvp.Key] = meshes;
@@ -423,6 +440,35 @@ public sealed class StatelParser
         }
 
         return new string(chars);
+    }
+
+    private List<StatelPlacement> ParsePlacedDynels(int playfieldId)
+    {
+        var placements = new List<StatelPlacement>();
+        byte[] raw = _database.GetRaw(1000026, playfieldId);
+        if (raw == null || raw.Length == 0) return placements;
+        foreach (var placed in AOPlacedDynelDecoder.Decode(raw))
+        {
+            try
+            {
+                var template = _database.Get<ItemObject>(placed.TemplateId);
+                if (template == null || !template.Stats.TryGetValue((AODB.Common.Enums.StatId)12, out uint mesh) || mesh == 0)
+                    continue;
+                float scale = template.Stats.TryGetValue((AODB.Common.Enums.StatId)360, out uint percent) && percent > 0 ? percent / 100f : 1f;
+                placements.Add(new StatelPlacement {
+                    MeshId = (int)mesh, Position = new Vector3(placed.X, placed.Y, placed.Z),
+                    Rotation = new Quaternion(placed.HeadingX, placed.HeadingY, placed.HeadingZ, placed.HeadingW),
+                    Scale = Vector3.one * scale, Transform = new ScaleRotationInfo { FinalScale = scale },
+                    TextureOverrides = Array.Empty<int>(), IdentityType = placed.IdentityType,
+                    IdentityInstance = placed.IdentityInstance, TemplateId = placed.TemplateId, DisplayName = template.Name
+                });
+            }
+            catch (Exception error)
+            {
+                Debug.LogWarning($"Native placement {placed.IdentityType}:{placed.IdentityInstance} template {placed.TemplateId}: {error.Message}");
+            }
+        }
+        return placements;
     }
 
     List<StatelPlacement> ParsePlacements(int playfieldId)
@@ -692,6 +738,10 @@ public sealed class StatelParser
     sealed class StatelPlacement
     {
         public int RoomIndex = -1;
+        public int IdentityType;
+        public int IdentityInstance;
+        public int TemplateId;
+        public string DisplayName;
         public int MeshId;
         public Vector3 Position;
         public Quaternion Rotation;
@@ -749,4 +799,13 @@ public sealed class StatelParser
             }
         }
     }
+}
+
+// Keeps the original identity available for interaction with native placed objects.
+public sealed class NativePlacedDynel : MonoBehaviour
+{
+    public int IdentityType;
+    public int IdentityInstance;
+    public int TemplateId;
+    public string DisplayName;
 }

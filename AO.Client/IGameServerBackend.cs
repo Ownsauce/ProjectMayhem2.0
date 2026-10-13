@@ -70,6 +70,7 @@ namespace AO.Client
         InventorySnapshot GetContainerInventorySnapshot(int containerInstance);
 
         Task UseItemAsync(ItemLocation location, CancellationToken cancellationToken = default);
+        Task UseWorldObjectAsync(int identityType, int identityInstance, CancellationToken cancellationToken = default);
 
         Task UseSpecialAttackAsync(int statId, int targetType, int targetInstance, CancellationToken cancellationToken = default);
 

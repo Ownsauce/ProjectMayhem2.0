@@ -59,6 +59,27 @@ skills. It also checks the combat animation tokens against the installed catalog
 It does not connect to a server or require Unity. `PROJECTMAYHEM_AO_INSTALL` can
 supply the installation path instead of the argument.
 
+The installed-data suite also checks creature/weapon CAT animation selection,
+every terrain height sample for PFs 3081, 800, and 4582, and all 73 native Fair
+Trade placements and their mesh resources. The terrain hashes refer to the
+validated local database version; changed game data may require revalidation.
+An optional second argument runs the indoor helper to check PF 1186's entrance
+floor using the production floor-support builder:
+
+```sh
+dotnet run --project tests/AO.Client.GameplayMetadata.Tests.csproj -- \
+  '/path/to/Anarchy Online' \
+  "$PWD/AO.Unity/Assets/StreamingAssets/Tools/AOIndoorVisualExtractor.exe"
+```
+
+The world-delta suite replays the selected N3 gameplay bodies in
+`Fixtures/Captures/` and the combat/corpse lifecycle in `Fixtures/Combat/`.
+It checks running-nano restoration, implicit/explicit self casts, morph updates,
+fatal-hit attack termination, corpse persistence, and loopback corpse open/take
+requests. Login restoration and loot transport cases include synthetic packets;
+the raw captures contain no login exchange or corpse-loot clicks. See the
+[capture review](../docs/review/captured-gameplay-20261012.md) for provenance.
+
 World delta regression cases cover unequip/equip acknowledgements followed by
 stats in the same batch, preserved equipment revisions, personal buffs with an
 NPC selected, friendly player targets, hostile nano targeting, and native NCU

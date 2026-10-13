@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using AO.Client.Backends.AORebirth;
 
-internal static class WorldDeltaTests
+internal static partial class WorldDeltaTests
 {
     private static int Main()
     {
@@ -22,6 +22,9 @@ internal static class WorldDeltaTests
         TestHealthStats();
         TestNativeCombat();
         TestNativeSpecials();
+        TestCapturedGameplay();
+        TestRunningNanoRestore();
+        TestCapturedDeathAndCorpses();
         TestImmediateWorldDelivery();
         TestDespawn();
         TestVendingMachine();
@@ -38,7 +41,7 @@ internal static class WorldDeltaTests
         // Installed Composite Utility metadata: Can=0, Flags=0x10000, NCU=4.
         var composite = AO.Client.World.NanoCastTargetPolicy.Resolve(18, 0, 0x10000, npc);
         var request = AORebirthProtocol.CreateNanoCast(18, 287046, composite.IdentityType, composite.IdentityInstance);
-        Require(new BigEndianReader(request, 16 + 25).ReadInt32() == 18,
+        Require(new BigEndianReader(request, 16 + 25).ReadInt32() == 0,
             "Composite Utility uses caster NCU with an NPC still selected");
         Require(AO.Client.World.NanoCastTargetPolicy.Resolve(18, 0, 0x10000, null).IdentityInstance == 18,
             "personal buff defaults to self with no target");
@@ -362,7 +365,7 @@ internal static class WorldDeltaTests
         return new AORebirthPacket(AORebirthProtocol.N3PacketType, 0, body.ToArray());
     }
 
-    private static AORebirthPacket AppearanceFullUpdate(bool extended)
+    private static AORebirthPacket AppearanceFullUpdate(bool extended, int remaining = 3600)
     {
         using var body = new MemoryStream();
         WriteInt(body, AORebirthProtocol.SimpleCharFullUpdate); WriteInt(body, 50000); WriteInt(body, 18);
@@ -384,7 +387,12 @@ internal static class WorldDeltaTests
             WriteInt(body, 2 * 0x3F1);
             body.Write(new byte[44]);
         }
-        WriteInt(body, 2 * 0x3F1); body.Write(new byte[20]); // active nano
+        WriteInt(body, (remaining > 0 ? 2 : 1) * 0x3F1);
+        if (remaining > 0)
+        {
+            WriteInt(body, 53019); WriteInt(body, 82834); WriteInt(body, 123456);
+            WriteInt(body, remaining); WriteInt(body, remaining);
+        }
         WriteInt(body, 50000); WriteInt(body, 18); WriteInt(body, 1); body.Write(new byte[12]); // waypoint
         WriteAppearanceArrays(body);
         WriteInt(body, 2); body.WriteByte(0); // complete tail

@@ -45,7 +45,7 @@ public static class AbiffMeshFactory
         };
     }
 
-    public static Mesh CreateUnityMesh(AbiffMeshData data, string name)
+    public static Mesh CreateUnityMesh(AbiffMeshData data, string name, bool keepReadable = false)
     {
         if (data == null || data.Vertices == null || data.Vertices.Length == 0)
             return null;
@@ -60,7 +60,7 @@ public static class AbiffMeshFactory
         mesh.SetUVs(0, data.UVs);
         mesh.SetTriangles(data.Triangles, 0, calculateBounds: false);
         mesh.RecalculateBounds();
-        mesh.UploadMeshData(markNoLongerReadable: true);
+        mesh.UploadMeshData(markNoLongerReadable: !keepReadable);
         return mesh;
     }
 }

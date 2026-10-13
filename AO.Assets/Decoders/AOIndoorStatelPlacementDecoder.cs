@@ -97,3 +97,65 @@ namespace AO.Assets.Decoders
         { if (bytes < 0 || reader.BaseStream.Position > end - bytes) throw new InvalidDataException("Indoor statel record exceeds its room block"); }
     }
 }
+
+namespace AO.Assets.Decoders
+{
+    public sealed class AOPlacedDynelPlacement
+    {
+        public int IdentityType { get; internal set; }
+        public int IdentityInstance { get; internal set; }
+        public int TemplateId { get; internal set; }
+        public int PlayfieldId { get; internal set; }
+        public float X { get; internal set; }
+        public float Y { get; internal set; }
+        public float Z { get; internal set; }
+        public float HeadingX { get; internal set; }
+        public float HeadingY { get; internal set; }
+        public float HeadingZ { get; internal set; }
+        public float HeadingW { get; internal set; }
+    }
+
+    /// <summary>World-space placed objects, separate from the .pf scenery placements.</summary>
+    public static class AOPlacedDynelDecoder
+    {
+        public static IReadOnlyList<AOPlacedDynelPlacement> Decode(byte[] raw)
+        {
+            if (raw == null || raw.Length < 16) throw new InvalidDataException("Truncated placed-dynel resource.");
+            using var reader = new BinaryReader(new MemoryStream(raw, false));
+            if (reader.ReadInt32() != 1000026) throw new InvalidDataException("Not a placed-dynel resource.");
+            reader.ReadInt32(); reader.ReadInt32();
+            int count = reader.ReadInt32();
+            if (count < 0 || count > 65535) throw new InvalidDataException("Invalid placed-dynel count.");
+            var placements = new List<AOPlacedDynelPlacement>(count);
+            for (int i = 0; i < count; i++)
+            {
+                int length = reader.ReadInt32();
+                long end = reader.BaseStream.Position + length;
+                if (length < 64 || end > raw.Length) throw new InvalidDataException("Truncated placed dynel.");
+                var placed = new AOPlacedDynelPlacement {
+                    IdentityType = reader.ReadInt32(), IdentityInstance = reader.ReadInt32()
+                };
+                reader.ReadInt32(); reader.ReadInt32(); reader.ReadInt32();
+                placed.PlayfieldId = reader.ReadInt32();
+                placed.X = ReadFinite(reader); placed.Y = ReadFinite(reader); placed.Z = ReadFinite(reader);
+                placed.HeadingW = ReadFinite(reader); placed.HeadingX = ReadFinite(reader);
+                placed.HeadingY = ReadFinite(reader); placed.HeadingZ = ReadFinite(reader);
+                reader.ReadInt32();
+                placed.TemplateId = reader.ReadInt32();
+                int descriptorLength = reader.ReadInt32();
+                if (descriptorLength < 0 || reader.BaseStream.Position + descriptorLength != end)
+                    throw new InvalidDataException("Invalid placed-dynel descriptor length.");
+                reader.BaseStream.Position = end;
+                placements.Add(placed);
+            }
+            if (reader.BaseStream.Position != raw.Length) throw new InvalidDataException("Unexpected placed-dynel trailer.");
+            return placements;
+        }
+        private static float ReadFinite(BinaryReader reader)
+        {
+            float value = reader.ReadSingle();
+            if (float.IsNaN(value) || float.IsInfinity(value)) throw new InvalidDataException("Nonfinite placed-dynel transform.");
+            return value;
+        }
+    }
+}

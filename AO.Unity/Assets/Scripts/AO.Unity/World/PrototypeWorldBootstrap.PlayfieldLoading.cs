@@ -509,6 +509,27 @@ namespace AO.Unity.World
             }
         }
 
+        private System.Collections.IEnumerator WaitForNativeIndoorPresentation(
+            int pf, Transform parent, NativeIndoorVisuals visuals, int loadTicket)
+        {
+            // Yield once so TransitionToPlayfield can queue the authoritative destination.
+            yield return null;
+            while (visuals != null && !visuals.IsReady && string.IsNullOrEmpty(visuals.Failure))
+            {
+                if (loadTicket != _activePlayfieldGlbLoadTicket || parent != _activePlayfieldRoot)
+                    yield break;
+                yield return null;
+            }
+            if (loadTicket != _activePlayfieldGlbLoadTicket || parent != _activePlayfieldRoot)
+                yield break;
+            Physics.SyncTransforms();
+            // Native copies keep the source geometry but change the active identity
+            // after TransitionToPlayfield returns.
+            if (_pendingTransitionPlayfieldId == pf)
+                _pendingTransitionPlayfieldId = _activePlayfieldId;
+            CompletePlayfieldGlbOverrideLoad(_activePlayfieldId, parent, loadTicket);
+        }
+
         private void InitializePlayfieldGlbOverrideRuntimeState(int pf, GameObject root)
         {
             _activePlayfieldRoot = root.transform;

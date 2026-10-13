@@ -1292,7 +1292,7 @@ namespace AO.Unity.World
             return false;
         }
 
-        private bool TryResolvePrimaryVisibleBounds(out Bounds bounds)
+        public bool TryResolvePrimaryVisibleBounds(out Bounds bounds)
         {
             bounds = default;
 
@@ -1309,7 +1309,8 @@ namespace AO.Unity.World
                 var r = renderers[i];
                 if (r == null || !r.enabled)
                     continue;
-                if (r is ParticleSystemRenderer || r is TrailRenderer || r is LineRenderer)
+                if (r is ParticleSystemRenderer || r is TrailRenderer || r is LineRenderer
+                    || r.GetComponent<TextMesh>() != null)
                     continue;
 
                 string n = r.name ?? string.Empty;

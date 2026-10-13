@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace AO.Client.World
 {
     public enum NearbyEntityKind { Player, Npc }
@@ -9,7 +11,9 @@ namespace AO.Client.World
             float x, float y, float z, uint appearance = 0,
             int npcFamily = 0, int npcLosHeight = 0, int npcUnknown = 0,
             uint monsterData = 0, int monsterScale = 0,
-            int visualFlags = 0, int visibleTitle = 0, CharacterAppearanceSnapshot equipmentAppearance = null)
+            int visualFlags = 0, int visibleTitle = 0, CharacterAppearanceSnapshot equipmentAppearance = null,
+            IReadOnlyList<NanoEffectUpdate> activeNanos = null,
+            int corpseSourceType = 0, int corpseSourceInstance = 0)
         {
             IdentityType = identityType;
             IdentityInstance = identityInstance;
@@ -31,6 +35,9 @@ namespace AO.Client.World
             VisualFlags = visualFlags;
             VisibleTitle = visibleTitle;
             EquipmentAppearance = equipmentAppearance;
+            ActiveNanos = activeNanos;
+            CorpseSourceType = corpseSourceType;
+            CorpseSourceInstance = corpseSourceInstance;
         }
 
         public int IdentityType { get; }
@@ -53,6 +60,23 @@ namespace AO.Client.World
         public int VisualFlags { get; }
         public int VisibleTitle { get; }
         public CharacterAppearanceSnapshot EquipmentAppearance { get; }
+        // Null means no full snapshot was supplied; empty means no running buffs.
+        public IReadOnlyList<NanoEffectUpdate> ActiveNanos { get; }
+        public bool IsCorpse => IdentityType == 51050;
+        public bool IsDead => IsCorpse || (Health > 0 && HealthDamage >= Health);
+        public int CorpseSourceType { get; }
+        public int CorpseSourceInstance { get; }
+
+        public bool IsMorphedPlayer => Kind == NearbyEntityKind.Player && MonsterData > 0;
+
+        public NearbyEntity WithVisualStats(uint monsterData, int monsterScale,
+            CharacterAppearanceSnapshot equipmentAppearance)
+        {
+            return new NearbyEntity(IdentityType, IdentityInstance, Kind, Name, Level,
+                Health, HealthDamage, PlayfieldId, X, Y, Z, Appearance,
+                NpcFamily, NpcLosHeight, NpcUnknown, monsterData, monsterScale,
+                equipmentAppearance?.VisualFlags ?? VisualFlags, VisibleTitle, equipmentAppearance, ActiveNanos, CorpseSourceType, CorpseSourceInstance);
+        }
 
         public NearbyEntity WithEquipmentAppearance(CharacterAppearanceSnapshot value)
         {
@@ -60,7 +84,7 @@ namespace AO.Client.World
             return new NearbyEntity(IdentityType, IdentityInstance, Kind, Name, Level,
                 Health, HealthDamage, PlayfieldId, X, Y, Z, Appearance,
                 NpcFamily, NpcLosHeight, NpcUnknown, MonsterData, MonsterScale,
-                value?.VisualFlags ?? VisualFlags, VisibleTitle, value);
+                value?.VisualFlags ?? VisualFlags, VisibleTitle, value, ActiveNanos, CorpseSourceType, CorpseSourceInstance);
         }
 
         public NearbyEntity WithPosition(float x, float y, float z)
@@ -68,7 +92,7 @@ namespace AO.Client.World
             return new NearbyEntity(IdentityType, IdentityInstance, Kind, Name, Level,
                 Health, HealthDamage, PlayfieldId, x, y, z, Appearance,
                 NpcFamily, NpcLosHeight, NpcUnknown, MonsterData, MonsterScale,
-                VisualFlags, VisibleTitle, EquipmentAppearance);
+                VisualFlags, VisibleTitle, EquipmentAppearance, ActiveNanos, CorpseSourceType, CorpseSourceInstance);
         }
 
         public NearbyEntity WithHealth(int maximumHealth, int currentHealth)
@@ -77,7 +101,7 @@ namespace AO.Client.World
             return new NearbyEntity(IdentityType, IdentityInstance, Kind, Name, Level,
                 maximumHealth, damage, PlayfieldId, X, Y, Z, Appearance,
                 NpcFamily, NpcLosHeight, NpcUnknown, MonsterData, MonsterScale,
-                VisualFlags, VisibleTitle, EquipmentAppearance);
+                VisualFlags, VisibleTitle, EquipmentAppearance, ActiveNanos, CorpseSourceType, CorpseSourceInstance);
         }
     }
 }

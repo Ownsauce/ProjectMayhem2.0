@@ -197,7 +197,11 @@ namespace AO.Unity.World
                 rb.position = worldPosition;
             }
 
-            t.position = worldPosition;
+            var walker = t.GetComponent<PrototypeWalkerController>();
+            if (walker != null)
+                walker.ApplyAuthoritativeTeleportPosition(worldPosition);
+            else
+                t.position = worldPosition;
         }
 
         private void ClearActivePlayfield()
