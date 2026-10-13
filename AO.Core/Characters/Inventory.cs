@@ -202,6 +202,14 @@ namespace AO.Core.Characters
             return true;
         }
 
+        public InventoryContainer SetAuthoritativeContainerCapacity(long containerInstanceId, int capacity)
+        {
+            if (capacity < 0 || capacity > 1024) throw new System.ArgumentOutOfRangeException(nameof(capacity));
+            if (!_containers.TryGetValue(containerInstanceId, out var container) || container.Capacity != capacity)
+                _containers[containerInstanceId] = container = new InventoryContainer(capacity);
+            return container;
+        }
+
         private void EnsureContainer(long containerInstanceId, int capacity)
         {
             if (_containers.ContainsKey(containerInstanceId))

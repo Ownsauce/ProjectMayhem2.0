@@ -158,6 +158,8 @@ namespace AO.Unity.Prototype
             if (_gameServerSession == null)
                 _gameServerSession = gameObject.AddComponent<AOGameServerSession>();
             _context.ServerSession = _gameServerSession;
+            _gameServerSession.NanoEffectChanged -= HandleServerNanoEffect;
+            _gameServerSession.NanoEffectChanged += HandleServerNanoEffect;
             _gameServerSession.InventoryChanged -= HandleServerInventoryChanged;
             _gameServerSession.InventoryChanged += HandleServerInventoryChanged;
             _gameServerSession.CharacterStateChanged -= HandleServerCharacterStateChanged;
@@ -169,6 +171,8 @@ namespace AO.Unity.Prototype
             _characterSelectionRoot.gameObject.SetActive(false);
             BuildConnectionSetup(overlayParent, font);
         }
+
+        private void HandleServerNanoEffect(NanoEffectUpdate effect) => _context?.ApplyServerNanoEffect(effect);
 
         private void HandleServerInventoryChanged(InventorySnapshot snapshot)
         {

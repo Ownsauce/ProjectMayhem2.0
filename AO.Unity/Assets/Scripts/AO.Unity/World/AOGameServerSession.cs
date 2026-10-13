@@ -217,19 +217,39 @@ namespace AO.Unity.World
         private NearbyEntity ReconcileControlledHandMeshes(NearbyEntity entity)
         {
             var appearance = entity?.EquipmentAppearance;
-            if (appearance == null
-                || (_controlledRightHandEquipped != false && _controlledLeftHandEquipped != false))
-                return entity;
+            if (appearance == null) return entity;
             var meshes = appearance.Meshes.Where(mesh =>
                 !(_controlledRightHandEquipped == false && mesh.Position == 1)
-                && !(_controlledLeftHandEquipped == false && mesh.Position == 2));
+                && !(_controlledLeftHandEquipped == false && mesh.Position == 2)).ToList();
+            // Appearance messages and move acknowledgements can arrive in either order.
+            // Resolve the two hand meshes from acknowledged worn slots so stale appearance
+            // lists cannot retain the previous weapon or choose its previous hand.
+            var state = _backend?.GetCharacterStateSnapshot();
+            if (state != null)
+                foreach (var item in state.Slots)
+                {
+                    if (item == null || (item.Slot != 6 && item.Slot != 8)) continue;
+                    if (!AOItemObjectResolver.TryResolve(item.LowId, item.HighId, item.Quality, out var raw)) continue;
+                    int meshId = raw.StatValues?.FirstOrDefault(stat => stat != null && stat.Stat == 209)?.RawValue ?? 0;
+                    if (meshId <= 0) meshId = raw.StatValues?.FirstOrDefault(stat => stat != null && stat.Stat == 12)?.RawValue ?? 0;
+                    if (meshId == 9013) continue;
+                    if (meshId <= 0) continue;
+                    int position = item.Slot == 6 ? 1 : 2;
+                    var previous = appearance.Meshes.FirstOrDefault(mesh => mesh.MeshId == (uint)meshId);
+                    meshes.RemoveAll(mesh => mesh.Position == position);
+                    meshes.Add(new AppearanceMesh(position, (uint)meshId, previous.OverrideTextureId, previous.Layer));
+                    Debug.Log($"[AO Appearance] Worn hand: slot={item.Slot}, item={item.LowId}/{item.HighId}, mesh={meshId}, position={position}.");
+                }
             return entity.WithEquipmentAppearance(new CharacterAppearanceSnapshot(
                 appearance.Textures, meshes, appearance.VisualFlags, appearance.HeadMeshId));
         }
 
+        private long _reconciledEquipmentRevision = -1;
+
         private void ReconcileControlledEquipment(CharacterStateSnapshot snapshot)
         {
-            if (snapshot == null || snapshot.IsStatUpdateOnly) return;
+            if (snapshot == null || (snapshot.IsStatUpdateOnly && snapshot.EquipmentRevision == _reconciledEquipmentRevision)) return;
+            _reconciledEquipmentRevision = snapshot.EquipmentRevision;
             _controlledRightHandEquipped = snapshot.Slots.Any(slot => slot != null && slot.Slot == 0x06);
             _controlledLeftHandEquipped = snapshot.Slots.Any(slot => slot != null && slot.Slot == 0x08);
             if (_controlledRawAppearance != null)
@@ -271,6 +291,67 @@ namespace AO.Unity.World
         public event Action<CharacterStateSnapshot> CharacterStateChanged;
         public event Action<DungeonLayout> ProceduralLayoutVerified;
         public InventorySnapshot CurrentInventory => _backend?.GetInventorySnapshot();
+        public event Action<NanoEffectUpdate> NanoEffectChanged;
+
+        private bool? _sentSitting;
+        private async Task SynchronizePostureAsync()
+        {
+            if (!IsInWorld || _controlledPlayer == null || _worldOrigin == null) return;
+            bool sitting = _controlledPlayer.GetComponent<CharacterAppearanceController>()?.IsSitting == true;
+            if (_sentSitting == sitting) return;
+            var relative = _controlledPlayer.position - _worldOriginOffset;
+            Vector3 pos = !string.IsNullOrEmpty(_proceduralDoorWorldId) ? _controlledPlayer.position
+                : new Vector3(_worldOrigin.X + relative.x, _worldOrigin.Y + relative.y, _worldOrigin.Z + relative.z);
+            Quaternion q = _controlledPlayer.rotation;
+            await _backend.SendPlayerMovementAsync(new PlayerMovementUpdate(pos.x, pos.y, pos.z, q.x, q.y, q.z, q.w,
+                (byte)(sitting ? 0x1e : 0x25), Environment.TickCount), _lifetime.Token);
+            _sentSitting = sitting;
+        }
+
+        private void ApplyCombatUpdate(CombatUpdate combat)
+        {
+            bool self = combat.AttackerType == 50000 && combat.AttackerInstance.ToString() == CurrentCharacterId;
+            GameObject actor = self ? _controlledPlayer?.gameObject : null;
+            if (!self) _entityPlaceholders.TryGetValue(combat.AttackerType + ":" + combat.AttackerInstance, out actor);
+            var appearance = actor?.GetComponent<CharacterAppearanceController>();
+            if (combat.Kind == CombatUpdateKind.Started || combat.Kind == CombatUpdateKind.Stopped)
+            {
+                if (self) AO.Unity.Prototype.PrototypeUiContext.Active?.ApplyServerAttackState(combat);
+                else appearance?.SetServerAttackActive(combat.Kind == CombatUpdateKind.Started);
+            }
+            else
+            {
+                appearance?.TryPlayServerWeaponHit(combat.SpecialStatId, combat.HandSlot);
+                string attacker = self ? "You" : actor?.name ?? "An attacker";
+                _entityPlaceholders.TryGetValue(combat.TargetType + ":" + combat.TargetInstance, out var targetActor);
+                string target = combat.TargetInstance.ToString() == CurrentCharacterId ? "you" : targetActor?.name ?? "the target";
+                AO.Unity.AOStyle.ChatDamageWindowView.AppendDamageFeed(combat.Kind == CombatUpdateKind.Miss
+                    ? $"{attacker} missed {target}." : $"{attacker} hit {target}{(combat.SpecialStatId > 0 ? " with " + AO.Unity.Prototype.PrototypeUiContext.GetSpecialName(combat.SpecialStatId) : string.Empty)} for {combat.Damage} damage.");
+            }
+        }
+
+        public Task UseSpecialAttackAsync(int statId, int targetType, int targetInstance)
+            => _backend.UseSpecialAttackAsync(statId, targetType, targetInstance, _lifetime.Token);
+
+        public Task SetAttackTargetAsync(int targetType, int targetInstance)
+            => _backend.SetAttackTargetAsync(targetType, targetInstance, _lifetime.Token);
+
+        public Task CancelNanoAsync(int nanoId)
+            => _backend.CancelNanoAsync(nanoId, _lifetime.Token);
+
+        public Task CastNanoAsync(int nanoId, int targetType, int targetInstance)
+            => _backend.CastNanoAsync(nanoId, targetType, targetInstance, _lifetime.Token);
+
+        public async Task UseItemAsync(ItemLocation location)
+        {
+            if (!IsInWorld || !_backend.Capabilities.HasFlag(BackendCapabilities.ItemUse))
+                throw new InvalidOperationException("This connection does not support item use.");
+            Debug.Log($"[AO.Client] Item use requested: {location.Area}[{location.Index}], container={location.ContainerInstance}.");
+            await SynchronizePostureAsync();
+            await _backend.UseItemAsync(location, _lifetime.Token);
+            Debug.Log("[AO.Client] Item use accepted by server.");
+        }
+
         public CharacterStateSnapshot CurrentCharacterState => _backend?.GetCharacterStateSnapshot();
         public NearbyEntity CurrentControlledAppearance => _controlledAppearance;
         public DungeonLayout LastVerifiedProceduralLayout { get; private set; }
@@ -279,6 +360,7 @@ namespace AO.Unity.World
             && (_backend.State == ClientConnectionState.Authenticated
                 || _backend.State == ClientConnectionState.InWorld);
 
+        public string CurrentCharacterId => _worldOrigin?.CharacterId;
         public string ServerDisplayName => string.IsNullOrWhiteSpace(serverName) ? serverHost : serverName;
         public string ServerEndpoint => _backend?.ConnectedEndpoint ?? $"{serverHost}:{serverPort}";
         public long PacketsSent => _backend?.PacketsSent ?? 0;
@@ -506,6 +588,7 @@ namespace AO.Unity.World
             _movementSendPending = true;
             try
             {
+                await SynchronizePostureAsync();
                 foreach (byte action in actions)
                 {
                     var movement = new PlayerMovementUpdate(position.x, position.y, position.z,
@@ -700,6 +783,7 @@ namespace AO.Unity.World
             _entityRemovalVersions.Clear();
             _placeholderRoot = new GameObject("AO Network Placeholders").transform;
             _worldOrigin = bootstrap;
+            _sentSitting = null;
             _entityPlaceholders.Clear();
             _entityMovementTargets.Clear();
             _remoteMovementTargets.Clear();
@@ -825,6 +909,11 @@ namespace AO.Unity.World
                     }
                     if (batch.Inventory != null)
                         InventoryChanged?.Invoke(batch.Inventory);
+                    foreach (var container in batch.ContainerInventories)
+                        InventoryChanged?.Invoke(container);
+                    foreach (var cooldown in batch.SpecialCooldowns) AO.Unity.Prototype.PrototypeUiContext.Active?.ApplyServerSpecialCooldown(cooldown);
+                    foreach (var combat in batch.CombatUpdates) ApplyCombatUpdate(combat);
+                    foreach (var effect in batch.NanoEffects) NanoEffectChanged?.Invoke(effect);
                     foreach (string serverMessage in batch.ServerMessages)
                     {
                         if (!string.IsNullOrEmpty(serverMessage)
@@ -834,6 +923,7 @@ namespace AO.Unity.World
                         if (TryHandleProceduralDoorState(serverMessage))
                             continue;
                         Debug.Log("[AO.Server] " + serverMessage);
+                        AO.Unity.Prototype.PrototypeUiContext.Active?.ApplyServerSpecialLockNotice(serverMessage);
                         AO.Unity.Prototype.PrototypeUiContext.Active?.PublishStatus(serverMessage);
                     }
                     CharacterStateSnapshot characterState = _backend.GetCharacterStateSnapshot();
@@ -1715,6 +1805,7 @@ namespace AO.Unity.World
             _controlledSourceBody = 0;
             _appliedRightHandEquipped = null;
             _appliedLeftHandEquipped = null;
+            _sentSitting = null;
             _controlledRightHandEquipped = null;
             _controlledLeftHandEquipped = null;
             if (_controlledPlayer != null)

@@ -134,6 +134,8 @@ namespace AO.Unity.AOStyle
             RefreshResponsiveGrid();
         }
 
+        private string _renderedPrograms;
+
         private void Refresh()
         {
             if (_context == null || _summaryText == null || _gridRoot == null)
@@ -143,9 +145,13 @@ namespace AO.Unity.AOStyle
             int max = _context.GetCurrentNcuCapacity();
             _summaryText.text = $"{used}/{max}";
 
+            var active = _context.GetActivePrograms();
+            string signature = _gridLayout.constraintCount.ToString();
+            if (active != null) foreach (var program in active) signature += $"/{program.ActiveId}:{program.IconId}:{program.Name}";
+            if (_renderedPrograms == signature) return;
+            _renderedPrograms = signature;
             AOStyleUiFactoryCleanup.Clear(_gridRoot);
             _remainingByActiveId.Clear();
-            var active = _context.GetActivePrograms();
             if (active == null || active.Count == 0)
             {
                 AOStyleUiFactory.CreateText("Empty", _gridRoot, "No programs running.", _font, 12, TextAnchor.MiddleLeft);

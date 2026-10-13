@@ -337,9 +337,202 @@ namespace AO.Client.Backends.AORebirth
             return packet.ToArray();
         }
 
+        public static byte[] CreateItemUse(int characterId, int page, int placement, int correlation = 0)
+        {
+            if (characterId <= 0 || (page == 107 ? ((uint)placement >> 16) == 0 : !IsItemPlacement(placement)))
+                throw new ArgumentOutOfRangeException(nameof(placement));
+            if (page != 107 && page != ItemPage(placement)) throw new ArgumentException("Item page does not match its slot.");
+            using var body = new MemoryStream();
+            WriteInt32(body, 0x52526858); // GenericCmd, Use
+            WriteInt32(body, 50000); WriteInt32(body, characterId); body.WriteByte(0);
+            WriteInt32(body, 0); WriteInt32(body, 1); WriteInt32(body, 3); WriteInt32(body, correlation);
+            WriteInt32(body, 50000); WriteInt32(body, characterId);
+            WriteInt32(body, page); WriteInt32(body, placement);
+            return CreateN3Packet(characterId, body.ToArray());
+        }
+
+        public static byte[] CreateSpecialAttackRequest(int owner, int statId, int targetType, int targetInstance)
+        {
+            if (owner <= 0 || statId <= 0 || targetType <= 0 || targetInstance <= 0)
+                throw new ArgumentOutOfRangeException(nameof(statId));
+            using var body = new MemoryStream();
+            WriteInt32(body, 0x51492120); WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(0);
+            WriteInt32(body, targetType); WriteInt32(body, targetInstance); WriteInt32(body, statId);
+            return CreateN3Packet(owner, body.ToArray());
+        }
+
+        public static bool TryReadSpecialCooldown(AORebirthPacket packet, int owner, out SpecialCooldownUpdate cooldown)
+        {
+            cooldown = null;
+            if (!TryCreateN3Reader(packet, 0x5e477770, 39, out var r)) return false;
+            if (r.ReadInt32() != 50000 || r.ReadInt32() != owner) return false;
+            r.ReadByte(); int action = r.ReadInt32();
+            if (action != 0xaa && action != 0xa4) return false;
+            r.ReadInt32(); r.ReadInt32(); r.ReadInt32();
+            int p1 = r.ReadInt32(), p2 = r.ReadInt32(); r.ReadInt16();
+            int stat = action == 0xaa ? p1 : p2, seconds = action == 0xaa ? p2 : 0;
+            if (stat <= 0 || seconds < 0) return false;
+            cooldown = new SpecialCooldownUpdate(stat, seconds); return true;
+        }
+
+        public static byte[] CreateAttackRequest(int owner, int targetType, int targetInstance)
+        {
+            if (owner <= 0 || targetInstance < 0 || (targetInstance > 0 && targetType <= 0))
+                throw new ArgumentOutOfRangeException(nameof(targetInstance));
+            using var body = new MemoryStream();
+            WriteInt32(body, targetInstance == 0 ? 0x4a41203e : 0x28494070);
+            WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(0);
+            if (targetInstance == 0) WriteInt32(body, 1);
+            else { WriteInt32(body, targetType); WriteInt32(body, targetInstance); body.WriteByte(0); }
+            return CreateN3Packet(owner, body.ToArray());
+        }
+
+        public static bool TryReadCombatUpdate(AORebirthPacket packet, out CombatUpdate update)
+        {
+            update = null;
+            if (TryCreateN3Reader(packet, 0x28494070, 22, out var r))
+            {
+                int type = r.ReadInt32(), id = r.ReadInt32(); r.ReadByte();
+                int targetType = r.ReadInt32(), target = r.ReadInt32(); r.ReadByte();
+                update = new CombatUpdate(target == 0 ? CombatUpdateKind.Stopped : CombatUpdateKind.Started,
+                    type, id, targetType, target); return true;
+            }
+            if (TryCreateN3Reader(packet, 0x4a41203e, 17, out r))
+            {
+                int type = r.ReadInt32(), id = r.ReadInt32(); r.ReadByte(); r.ReadInt32();
+                update = new CombatUpdate(CombatUpdateKind.Stopped, type, id); return true;
+            }
+            if (TryCreateN3Reader(packet, 0x46002f16, 45, out r))
+            {
+                int type = r.ReadInt32(), id = r.ReadInt32(); r.ReadByte();
+                int damage = r.ReadInt32(); r.ReadInt32(); int hand = r.ReadInt32();
+                int targetType = r.ReadInt32(), target = r.ReadInt32();
+                r.ReadInt32(); r.ReadInt32(); r.ReadInt32();
+                if (damage < 0 || target <= 0) return false;
+                update = new CombatUpdate(CombatUpdateKind.Hit, type, id, targetType, target, damage, handSlot: hand); return true;
+            }
+            if (TryCreateN3Reader(packet, 0x754f1115, 41, out r))
+            {
+                int type = r.ReadInt32(), id = r.ReadInt32(); r.ReadByte();
+                int hand = r.ReadInt32(); int damage = r.ReadInt32(); r.ReadInt32();
+                int targetType = r.ReadInt32(), target = r.ReadInt32();
+                int special = r.ReadInt32(); r.ReadInt32();
+                if (damage < 0 || target <= 0) return false;
+                update = new CombatUpdate(CombatUpdateKind.Hit, type, id, targetType, target, damage, special, hand); return true;
+            }
+            if (TryCreateN3Reader(packet, 0x5c654b28, 41, out r))
+            {
+                r.Skip(9); r.ReadInt32(); int hand = r.ReadInt32();
+                int type = r.ReadInt32(), id = r.ReadInt32();
+                int targetType = r.ReadInt32(), target = r.ReadInt32(); int special = r.ReadInt32();
+                update = new CombatUpdate(CombatUpdateKind.Miss, type, id, targetType, target, specialStatId: special, handSlot: hand); return true;
+            }
+            return false;
+        }
+
+        public static byte[] CreateNanoCancel(int owner, int nanoId)
+        {
+            if (owner <= 0 || nanoId <= 0) throw new ArgumentOutOfRangeException(nameof(nanoId));
+            using var body = new MemoryStream();
+            WriteInt32(body, 0x5e477770); WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(0);
+            WriteInt32(body, 0x41); WriteInt32(body, 0); WriteInt32(body, 0); WriteInt32(body, 0);
+            WriteInt32(body, 0); WriteInt32(body, nanoId); WriteInt16(body, 0);
+            return CreateN3Packet(owner, body.ToArray());
+        }
+
+        public static byte[] CreateNanoCast(int owner, int nanoId, int targetType, int targetInstance)
+        {
+            if (owner <= 0 || nanoId <= 0 || targetInstance <= 0 || targetType <= 0) throw new ArgumentOutOfRangeException(nameof(nanoId));
+            using var body = new MemoryStream();
+            WriteInt32(body, 0x5e477770); WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(0);
+            WriteInt32(body, 0x13); WriteInt32(body, 0); WriteInt32(body, targetType); WriteInt32(body, targetInstance);
+            WriteInt32(body, 0); WriteInt32(body, nanoId); WriteInt16(body, 0);
+            return CreateN3Packet(owner, body.ToArray());
+        }
+
+        public static bool TryReadItemUseResult(AORebirthPacket packet, int owner, out int correlation, out int result)
+        {
+            correlation = result = 0;
+            if (!TryCreateN3Reader(packet, 0x52526858, 45, out var r)) return false;
+            if (r.ReadInt32() != 50000 || r.ReadInt32() != owner) return false;
+            r.ReadByte(); result = r.ReadInt32(); r.ReadInt32();
+            if (r.ReadInt32() != 3) return false;
+            correlation = r.ReadInt32();
+            return r.ReadInt32() == 50000 && r.ReadInt32() == owner && (result == 1 || result == 2);
+        }
+
+        public static bool TryReadNanoEffect(AORebirthPacket packet, int owner, out NanoEffectUpdate effect)
+        {
+            effect = null;
+            if (TryCreateN3Reader(packet, 0x5e477770, 39, out var r))
+            {
+                if (r.ReadInt32() != 50000 || r.ReadInt32() != owner) return false;
+                r.ReadByte(); if (r.ReadInt32() != 0x62) return false;
+                r.ReadInt32(); if (r.ReadInt32() != 53019) return false;
+                int nano = r.ReadInt32(); r.ReadInt32(); int duration = r.ReadInt32(); r.ReadInt16();
+                if (nano <= 0 || duration < 0) return false;
+                effect = new NanoEffectUpdate(nano, duration); return true;
+            }
+            if (TryCreateN3Reader(packet, 0x39343c68, 23, out r))
+            {
+                if (r.ReadInt32() != 50000 || r.ReadInt32() != owner) return false;
+                r.ReadByte(); if (r.ReadInt16() != 0 || r.ReadInt32() != 53019) return false;
+                int nano = r.ReadInt32(); if (nano <= 0) return false;
+                effect = new NanoEffectUpdate(nano, 0); return true;
+            }
+            return false;
+        }
+
+        public static bool TryReadFeedback(AORebirthPacket packet, out string text)
+        {
+            text = null;
+            if (!TryCreateN3Reader(packet, 0x50544d19, 25, out var r)) return false;
+            r.Skip(9); r.ReadInt32(); int category = r.ReadInt32(); int id = r.ReadInt32();
+            if (category != 110) return false;
+            text = id switch { 141178878 => "Item requirements are not met.", 220179189 => "Target has insufficient NCU.",
+                124550313 => "Nano program executed successfully.", 205237300 => "Target resisted.",
+                171187118 => "You are already running this action.", _ => "The server reported an action restriction." };
+            return true;
+        }
+
+        public static bool TryReadUploadedNano(AORebirthPacket packet, int owner, out int nanoId)
+        {
+            nanoId = 0;
+            if (!TryCreateN3Reader(packet, 0x5e477770, 39, out var reader)) return false;
+            try
+            {
+                if (reader.ReadInt32() != 50000 || reader.ReadInt32() != owner) return false;
+                reader.ReadByte();
+                if (reader.ReadInt32() != 0xCC) return false;
+                reader.ReadInt32();
+                if (reader.ReadInt32() != 50000 || reader.ReadInt32() != owner || reader.ReadInt32() != 53019) return false;
+                nanoId = reader.ReadInt32();
+                reader.ReadInt16();
+                return nanoId > 0;
+            }
+            catch (EndOfStreamException) { nanoId = 0; return false; }
+        }
+
+        public static bool TryReadContainerOpen(AORebirthPacket packet, int owner, out int containerId)
+        {
+            containerId = 0;
+            if (!TryCreateN3Reader(packet, 0x2049527c, 29, out var reader)) return false;
+            try
+            {
+                if (reader.ReadInt32() != 51017) return false;
+                int id = reader.ReadInt32(); reader.ReadByte();
+                if (reader.ReadInt32() != 1 || reader.ReadInt32() != 0x64
+                    || reader.ReadInt32() != 50000 || reader.ReadInt32() != owner) return false;
+                containerId = id;
+                return id > 0;
+            }
+            catch (EndOfStreamException) { return false; }
+        }
+
         internal static int ItemPlacement(ItemLocation location)
         {
             if (location == null) throw new ArgumentNullException(nameof(location));
+            if (location.Area == ItemArea.Backpack) throw new NotSupportedException("Backpack moves require a container transfer request.");
             return location.Area == ItemArea.Inventory ? 0x40 + location.Index
                 : ((int)location.Area * 0x10) + 1 + location.Index;
         }
@@ -404,7 +597,10 @@ namespace AO.Client.Backends.AORebirth
                     if (entry.Slot >= 0x40) carried.Add(entry); else worn.Add(entry);
                 updatedInventory = new InventorySnapshot(inventory.Capacity, inventory.ContainerType,
                     inventory.ContainerInstance, inventory.MainInventorySlot, carried);
-                updatedCharacter = new CharacterStateSnapshot(worn, character.UploadedNanoIds, character.Stats);
+                bool changesWear = from < 0x40 || to < 0x40;
+                updatedCharacter = new CharacterStateSnapshot(worn, character.UploadedNanoIds, character.Stats,
+                    isStatUpdateOnly: !changesWear,
+                    equipmentRevision: character.EquipmentRevision + (changesWear ? 1 : 0));
                 return true;
             }
             catch (EndOfStreamException) { return false; }

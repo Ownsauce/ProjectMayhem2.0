@@ -11,16 +11,208 @@ internal static class WorldDeltaTests
         TestZoneRedirection();
         TestAppearance();
         TestItemMoves();
+        TestEquipmentRevisionThroughStats();
+        TestNanoCastTargets();
+        TestNativeItemUse();
         TestMovement();
         TestMobPathMovement();
         TestOutboundPlayerMovement();
         TestChatText();
         TestFullCharacterState();
         TestHealthStats();
+        TestNativeCombat();
+        TestNativeSpecials();
+        TestImmediateWorldDelivery();
         TestDespawn();
         TestVendingMachine();
         Console.WriteLine("PASS AO.Client world delta decoding");
         return 0;
+    }
+
+    private static void TestNanoCastTargets()
+    {
+        var npc = new AO.Client.World.NearbyEntity(50000, 99, AO.Client.World.NearbyEntityKind.Npc,
+            "Combat target", 1, 100, 0, 127, 0, 0, 0);
+        var player = new AO.Client.World.NearbyEntity(50000, 42, AO.Client.World.NearbyEntityKind.Player,
+            "Other player", 1, 100, 0, 127, 0, 0, 0);
+        // Installed Composite Utility metadata: Can=0, Flags=0x10000, NCU=4.
+        var composite = AO.Client.World.NanoCastTargetPolicy.Resolve(18, 0, 0x10000, npc);
+        var request = AORebirthProtocol.CreateNanoCast(18, 287046, composite.IdentityType, composite.IdentityInstance);
+        Require(new BigEndianReader(request, 16 + 25).ReadInt32() == 18,
+            "Composite Utility uses caster NCU with an NPC still selected");
+        Require(AO.Client.World.NanoCastTargetPolicy.Resolve(18, 0, 0x10000, null).IdentityInstance == 18,
+            "personal buff defaults to self with no target");
+        Require(AO.Client.World.NanoCastTargetPolicy.Resolve(18, 1 << 23, 0x10004, player).IdentityInstance == 18,
+            "self-only Pronouncement stays on caster when another player is selected");
+        Require(AO.Client.World.NanoCastTargetPolicy.Resolve(18, 0, 0x10000, player).IdentityInstance == 42,
+            "friendly buff can still target another player");
+        Require(AO.Client.World.NanoCastTargetPolicy.Resolve(18, 1 << 21, 0, npc).IdentityInstance == 99,
+            "explicit friendly targeting keeps NPC and pet recipients");
+        Require(AO.Client.World.NanoCastTargetPolicy.Resolve(18, 1 << 22, 1 << 15, npc).IdentityInstance == 99,
+            "hostile nano retains combat target");
+        var cancel = AORebirthProtocol.CreateNanoCancel(18, 82834);
+        Require(cancel.Length == 55 && new BigEndianReader(cancel, 16 + 13).ReadInt32() == 0x41
+            && new BigEndianReader(cancel, 16 + 21).ReadInt32() == 0
+            && new BigEndianReader(cancel, 16 + 33).ReadInt32() == 82834,
+            "NCU right-click sends native RemoveFriendlyNano with program id in Parameter2");
+        bool rejected = false;
+        try { AO.Client.World.NanoCastTargetPolicy.Resolve(18, 1 << 22, 1 << 15, null); }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected, "hostile nano with no target does not become a self cast");
+    }
+
+    private static void TestEquipmentRevisionThroughStats()
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        using var backend = new AORebirthBackend();
+        typeof(AORebirthBackend).GetField("_selectedCharacter", flags)!.SetValue(backend,
+            new AO.Client.Characters.CharacterSummary("18", "Test player", 1, 1, 1));
+        var oldWeapon = new AO.Client.World.InventoryEntrySnapshot(6, 101, 12, 100003, 100004, 1, 1);
+        var newWeapon = new AO.Client.World.InventoryEntrySnapshot(0x40, 101, 10, 100001, 100002, 1, 1);
+        typeof(AORebirthBackend).GetField("_characterState", flags)!.SetValue(backend,
+            new AO.Client.World.CharacterStateSnapshot(new[] { oldWeapon }, new[] { 123 }));
+        typeof(AORebirthBackend).GetField("_inventory", flags)!.SetValue(backend,
+            new AO.Client.World.InventorySnapshot(30, 50000, 18, 0, new[] { newWeapon }));
+        var apply = typeof(AORebirthBackend).GetMethod("ApplyWorldPacket", flags)!;
+        var deltas = new System.Collections.Generic.List<AO.Client.World.WorldEntityDelta>();
+        using var stats = new MemoryStream();
+        WriteInt(stats, AORebirthProtocol.Stat); WriteInt(stats, 50000); WriteInt(stats, 18); stats.WriteByte(1);
+        WriteInt(stats, 2); WriteInt(stats, 180); WriteInt(stats, 0); WriteInt(stats, 181); WriteInt(stats, 8);
+        var statPacket = new AORebirthPacket(10, 0, stats.ToArray());
+        apply.Invoke(backend, new object[] { MoveAck(101, 6, 0x42), deltas, 0, 0 });
+        apply.Invoke(backend, new object[] { statPacket, deltas, 0, 0 });
+        var removed = backend.GetCharacterStateSnapshot();
+        Require(removed.IsStatUpdateOnly && removed.Slots.Count == 0 && removed.EquipmentRevision == 1,
+            "unequip survives following stats and requires revision-zero UI to clear its icon");
+        Require(Find(backend.GetInventorySnapshot().Entries, 0x42).IdentityInstance == 12,
+            "removed weapon appears in inventory");
+        apply.Invoke(backend, new object[] { MoveAck(104, 0x40, 6), deltas, 0, 0 });
+        apply.Invoke(backend, new object[] { statPacket, deltas, 0, 0 });
+        var equipped = backend.GetCharacterStateSnapshot();
+        Require(equipped.IsStatUpdateOnly && equipped.EquipmentRevision == 2 && Find(equipped.Slots, 6).IdentityInstance == 10,
+            "new weapon survives same-batch stats and replaces previous equipment icon");
+        apply.Invoke(backend, new object[] { statPacket, deltas, 0, 0 });
+        Require(backend.GetCharacterStateSnapshot().EquipmentRevision == 2,
+            "ordinary stat updates preserve equipment revision without causing a rebuild");
+    }
+
+    private static void TestNativeCombat()
+    {
+        byte[] start = AORebirthProtocol.CreateAttackRequest(18, 50000, 99);
+        Require(start.Length == 38 && new BigEndianReader(start, 16).ReadInt32() == 0x28494070,
+            "Q attack uses native Attack packet");
+        var started = new AORebirthPacket(10, 0, start[16..]);
+        Require(AORebirthProtocol.TryReadCombatUpdate(started, out var attack)
+            && attack.Kind == AO.Client.World.CombatUpdateKind.Started && attack.AttackerInstance == 18
+            && attack.TargetInstance == 99, "decode server attack state");
+        byte[] stop = AORebirthProtocol.CreateAttackRequest(18, 0, 0);
+        Require(stop.Length == 33 && AORebirthProtocol.TryReadCombatUpdate(new AORebirthPacket(10, 0, stop[16..]), out var stopped)
+            && stopped.Kind == AO.Client.World.CombatUpdateKind.Stopped, "Q stops through native StopFight");
+        using var body = new MemoryStream();
+        WriteInt(body, 0x46002f16); WriteInt(body, 50000); WriteInt(body, 18); body.WriteByte(0);
+        WriteInt(body, 23); WriteInt(body, 19); WriteInt(body, 6);
+        WriteInt(body, 50000); WriteInt(body, 99); WriteInt(body, 0); WriteInt(body, 0); WriteInt(body, 4321);
+        var hit = new AORebirthPacket(10, 0, body.ToArray());
+        Require(AORebirthProtocol.TryReadCombatUpdate(hit, out var damage) && damage.Damage == 23
+            && damage.TargetInstance == 99, "server weapon damage parsed independently of ammo, hand and weapon instance");
+        for (int length = 0; length < body.Length; length++)
+            Require(!AORebirthProtocol.TryReadCombatUpdate(new AORebirthPacket(10, 0, body.ToArray()[..length]), out _),
+                "truncated hit ignored");
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        using var backend = new AORebirthBackend();
+        var entities = (System.Collections.Generic.Dictionary<string, AO.Client.World.NearbyEntity>)
+            typeof(AORebirthBackend).GetField("_worldEntities", flags)!.GetValue(backend)!;
+        entities["50000:99"] = new AO.Client.World.NearbyEntity(50000, 99, AO.Client.World.NearbyEntityKind.Npc,
+            "Test target", 1, 100, 10, 127, 0, 0, 0);
+        var deltas = new System.Collections.Generic.List<AO.Client.World.WorldEntityDelta>();
+        typeof(AORebirthBackend).GetMethod("ApplyWorldPacket", flags)!.Invoke(backend, new object[] { hit, deltas, 0, 0 });
+        Require(entities["50000:99"].HealthDamage == 33 && deltas.Count == 1,
+            "AttackInfo alone updates target HP without waiting for stats");
+        typeof(AORebirthBackend).GetField("_selectedCharacter", flags)!.SetValue(backend,
+            new AO.Client.Characters.CharacterSummary("99", "Test player", 1, 1, 1));
+        typeof(AORebirthBackend).GetField("_characterState", flags)!.SetValue(backend,
+            new AO.Client.World.CharacterStateSnapshot(null, null,
+                new System.Collections.Generic.Dictionary<int, int> { [27] = 90, [1] = 100 }));
+        typeof(AORebirthBackend).GetMethod("ApplyWorldPacket", flags)!.Invoke(backend, new object[] { hit, deltas, 0, 0 });
+        Require(backend.GetCharacterStateSnapshot().Stats[27] == 67
+            && backend.GetCharacterStateSnapshot().IsStatUpdateOnly,
+            "incoming weapon hit updates controlled health without rehydrating equipment");
+        using var missBody = new MemoryStream();
+        WriteInt(missBody, 0x5c654b28); WriteInt(missBody, 50000); WriteInt(missBody, 18); missBody.WriteByte(1);
+        WriteInt(missBody, -1); WriteInt(missBody, 6); WriteInt(missBody, 50000); WriteInt(missBody, 18);
+        WriteInt(missBody, 50000); WriteInt(missBody, 99); WriteInt(missBody, 0);
+        Require(AORebirthProtocol.TryReadCombatUpdate(new AORebirthPacket(10, 0, missBody.ToArray()), out var miss)
+            && miss.Kind == AO.Client.World.CombatUpdateKind.Miss && miss.Damage == 0, "native miss never applies damage");
+    }
+
+    private static void TestNativeSpecials()
+    {
+        var request = AORebirthProtocol.CreateSpecialAttackRequest(18, 148, 50000, 99);
+        Require(request.Length == 41 && new BigEndianReader(request, 16).ReadInt32() == 0x51492120
+            && new BigEndianReader(request, 16 + 21).ReadInt32() == 148,
+            "native Burst request addresses target and special skill");
+        using var body = new MemoryStream();
+        WriteInt(body, 0x754f1115); WriteInt(body, 50000); WriteInt(body, 18); body.WriteByte(0);
+        WriteInt(body, 8); WriteInt(body, 72); WriteInt(body, 3);
+        WriteInt(body, 50000); WriteInt(body, 99); WriteInt(body, 148); WriteInt(body, 0);
+        Require(AORebirthProtocol.TryReadCombatUpdate(new AORebirthPacket(10, 0, body.ToArray()), out var hit)
+            && hit.Damage == 72 && hit.SpecialStatId == 148 && hit.HandSlot == 8,
+            "special hit retains damage, skill and attacking hand");
+        for (int length = 0; length < body.Length; length++)
+            Require(!AORebirthProtocol.TryReadCombatUpdate(new AORebirthPacket(10, 0, body.ToArray()[..length]), out _),
+                "truncated special hit ignored");
+        static AORebirthPacket Action(int action, int p1, int p2)
+        {
+            using var data = new MemoryStream();
+            WriteInt(data, 0x5e477770); WriteInt(data, 50000); WriteInt(data, 18); data.WriteByte(0);
+            WriteInt(data, action); WriteInt(data, 0); WriteInt(data, 0); WriteInt(data, 0);
+            WriteInt(data, p1); WriteInt(data, p2); WriteShort(data, 0);
+            return new AORebirthPacket(10, 0, data.ToArray());
+        }
+        var used = Action(0xaa, 148, 19);
+        Require(AORebirthProtocol.TryReadSpecialCooldown(used, 18, out var lockUpdate)
+            && lockUpdate.StatId == 148 && lockUpdate.Seconds == 19, "server special used sets a nineteen-second cooldown");
+        Require(AORebirthProtocol.TryReadSpecialCooldown(Action(0xa4, 0, 148), 18, out var ready)
+            && ready.StatId == 148 && ready.Seconds == 0, "server special available clears cooldown");
+        Require(!AORebirthProtocol.TryReadSpecialCooldown(used, 99, out _), "another player's cooldown ignored");
+        Require(!AORebirthProtocol.TryReadSpecialCooldown(Action(0x62, 148, 19), 18, out _), "nano duration cannot become a special cooldown");
+        for (int length = 0; length < used.Body.Length; length++)
+            Require(!AORebirthProtocol.TryReadSpecialCooldown(new AORebirthPacket(10, 0, used.Body[..length]), 18, out _),
+                "truncated special cooldown ignored");
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        using var backend = new AORebirthBackend();
+        typeof(AORebirthBackend).GetField("_selectedCharacter", flags)!.SetValue(backend,
+            new AO.Client.Characters.CharacterSummary("18", "Test player", 1, 1, 1));
+        var deltas = new System.Collections.Generic.List<AO.Client.World.WorldEntityDelta>();
+        typeof(AORebirthBackend).GetMethod("ApplyWorldPacket", flags)!.Invoke(backend, new object[] { used, deltas, 0, 0 });
+        var drain = typeof(AORebirthBackend).GetMethod("DrainSpecialCooldowns", flags)!;
+        Require(((System.Collections.Generic.IReadOnlyList<AO.Client.World.SpecialCooldownUpdate>)drain.Invoke(backend, null)!).Count == 1,
+            "server cooldown forwarded to Unity");
+        Require(((System.Collections.Generic.IReadOnlyList<AO.Client.World.SpecialCooldownUpdate>)drain.Invoke(backend, null)!).Count == 0,
+            "cooldown delivered once");
+    }
+
+    private static void TestImmediateWorldDelivery()
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        using var backend = new AORebirthBackend();
+        var mailboxType = typeof(AORebirthBackend).GetNestedType("WorldPacketMailbox", System.Reflection.BindingFlags.NonPublic)!;
+        var mailbox = Activator.CreateInstance(mailboxType, true)!;
+        typeof(AORebirthBackend).GetField("_worldPackets", flags)!.SetValue(backend, mailbox);
+        typeof(AORebirthBackend).GetField("_worldStream", flags)!.SetValue(backend, new MemoryStream());
+        typeof(AORebirthBackend).GetField("_currentPlayfieldId", flags)!.SetValue(backend, 127);
+        typeof(AORebirthBackend).GetField("<State>k__BackingField", flags)!.SetValue(backend, AO.Client.ClientConnectionState.InWorld);
+        var packet = new AORebirthPacket(10, 0, AORebirthProtocol.CreateAttackRequest(18, 50000, 99)[16..]);
+        mailboxType.GetMethod("Write")!.Invoke(mailbox, new object[] { packet });
+        var batch = backend.ReceiveWorldDeltasAsync(128);
+        Require(batch.IsCompletedSuccessfully && batch.Result.PacketsObserved == 1 && batch.Result.CombatUpdates.Count == 1,
+            "isolated server reply is delivered immediately with no trailing aggregation delay");
+        mailboxType.GetMethod("Write")!.Invoke(mailbox, new object[] { packet });
+        using var canceled = new System.Threading.CancellationTokenSource(); canceled.Cancel();
+        try { backend.ReceiveWorldDeltasAsync(128, canceled.Token).GetAwaiter().GetResult(); Require(false, "cancel expected"); }
+        catch (OperationCanceledException) { }
+        Require(backend.ReceiveWorldDeltasAsync(128).Result.PacketsObserved == 1,
+            "canceled poll leaves queued server reply available");
     }
 
     private static void TestZoneRedirection()
@@ -273,6 +465,128 @@ internal static class WorldDeltaTests
         WriteInt(body, 0x47537a24); WriteInt(body, 50000); WriteInt(body, owner); body.WriteByte(0);
         WriteInt(body, page); WriteInt(body, from); WriteInt(body, 50000); WriteInt(body, owner); WriteInt(body, to);
         return new AORebirthPacket(AORebirthProtocol.N3PacketType, 0, body.ToArray());
+    }
+
+    private static void TestNativeItemUse()
+    {
+        // GenericCmd has a fixed target identity, not an X3F1-prefixed target array.
+        byte[] request = AORebirthProtocol.CreateItemUse(18, 104, 0x40);
+        Require(request.Length == 61, "GenericCmd item use wire size");
+        var reader = new BigEndianReader(request, 16);
+        Require(reader.ReadInt32() == 0x52526858 && reader.ReadInt32() == 50000 && reader.ReadInt32() == 18, "use sender");
+        reader.ReadByte();
+        Require(reader.ReadInt32() == 0 && reader.ReadInt32() == 1 && reader.ReadInt32() == 3 && reader.ReadInt32() == 0, "use action fields");
+        Require(reader.ReadInt32() == 50000 && reader.ReadInt32() == 18, "use user identity");
+        Require(reader.ReadInt32() == 104 && reader.ReadInt32() == 64, "use inventory target");
+        byte[] backpackRequest = AORebirthProtocol.CreateItemUse(18, 107, unchecked((60000 << 16) | 7));
+        Require(new BigEndianReader(backpackRequest, 16 + 37).ReadInt32() == 107
+            && new BigEndianReader(backpackRequest, 16 + 41).ReadInt32() == unchecked((60000 << 16) | 7), "packed backpack target preserves unsigned handle");
+        var slot = new AO.Client.World.ItemLocation(AO.Client.World.ItemArea.Backpack, 7, 1234);
+        Require(slot.ContainerInstance == 1234, "backpack address retains container identity");
+
+        using var body = new MemoryStream();
+        WriteInt(body, 0x5e477770); WriteInt(body, 50000); WriteInt(body, 18); body.WriteByte(0);
+        WriteInt(body, 0xCC); WriteInt(body, 0); WriteInt(body, 50000); WriteInt(body, 18);
+        WriteInt(body, 53019); WriteInt(body, 123456); WriteShort(body, 0);
+        var upload = new AORebirthPacket(10, 0, body.ToArray());
+        Require(AORebirthProtocol.TryReadUploadedNano(upload, 18, out int nano) && nano == 123456, "server upload acknowledgement");
+        Require(!AORebirthProtocol.TryReadUploadedNano(upload, 19, out _), "foreign upload rejected");
+        for (int length = 0; length < body.Length; length++)
+            Require(!AORebirthProtocol.TryReadUploadedNano(new AORebirthPacket(10, 0, body.ToArray()[..length]), 18, out _), "truncated upload rejected");
+
+        using var backend = new AORebirthBackend();
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        typeof(AORebirthBackend).GetField("_selectedCharacter", flags)!.SetValue(backend,
+            new AO.Client.Characters.CharacterSummary("18", "Test", 1, 1, 1));
+        typeof(AORebirthBackend).GetField("_characterState", flags)!.SetValue(backend,
+            new AO.Client.World.CharacterStateSnapshot(Array.Empty<AO.Client.World.InventoryEntrySnapshot>(), Array.Empty<int>()));
+        var captureState = typeof(AORebirthBackend).GetMethod("CaptureCharacterState", flags)!;
+        captureState.Invoke(backend, new object[] { upload });
+        captureState.Invoke(backend, new object[] { upload });
+        Require(backend.GetCharacterStateSnapshot().UploadedNanoIds.Count == 1, "upload acknowledgement updates roster once");
+        var main = new AO.Client.World.InventorySnapshot(30, 50000, 18, 0, Array.Empty<AO.Client.World.InventoryEntrySnapshot>());
+        typeof(AORebirthBackend).GetField("_inventory", flags)!.SetValue(backend, main);
+        using var inventory = new MemoryStream();
+        WriteInt(inventory, AORebirthProtocol.InventoryUpdate); WriteInt(inventory, 50000); WriteInt(inventory, 18); inventory.WriteByte(1);
+        WriteInt(inventory, 21); WriteInt(inventory, 3); WriteInt(inventory, 2 * 0x03F1);
+        WriteCharacterSlot(inventory, 7, 5, 9001, 100009, 100010, 20);
+        WriteInt(inventory, 51017); WriteInt(inventory, 1234); WriteInt(inventory, 60000); WriteInt(inventory, 1);
+        var bag = new AORebirthPacket(10, 0, inventory.ToArray());
+        var captureInventory = typeof(AORebirthBackend).GetMethod("CaptureInventory", flags)!;
+        captureInventory.Invoke(backend, new object[] { bag });
+        Require(ReferenceEquals(backend.GetInventorySnapshot(), main), "backpack update preserves main inventory");
+        var contents = backend.GetContainerInventorySnapshot(1234);
+        Require(contents.Capacity == 21 && contents.MainInventorySlot == 60000 && contents.Entries[0].Quantity == 5, "backpack contents and server handle retained");
+        var drain = typeof(AORebirthBackend).GetMethod("DrainContainerUpdates", flags)!;
+        Require(((System.Collections.Generic.IReadOnlyList<AO.Client.World.InventorySnapshot>)drain.Invoke(backend, null)!).Count == 1, "container update delivered once");
+        Require(((System.Collections.Generic.IReadOnlyList<AO.Client.World.InventorySnapshot>)drain.Invoke(backend, null)!).Count == 0, "container update queue drained");
+        using var openBody = new MemoryStream();
+        WriteInt(openBody, 0x2049527c); WriteInt(openBody, 51017); WriteInt(openBody, 1234); openBody.WriteByte(0);
+        WriteInt(openBody, 1); WriteInt(openBody, 0x64); WriteInt(openBody, 50000); WriteInt(openBody, 18);
+        var reopen = new AORebirthPacket(10, 0, openBody.ToArray());
+        captureInventory.Invoke(backend, new object[] { reopen });
+        Require(((System.Collections.Generic.IReadOnlyList<AO.Client.World.InventorySnapshot>)drain.Invoke(backend, null)!).Count == 1, "reopen acknowledgement republishes cached contents");
+        Require(!AORebirthProtocol.TryReadContainerOpen(reopen, 19, out _), "foreign container acknowledgement rejected");
+        typeof(AORebirthBackend).GetField("<State>k__BackingField", flags)!.SetValue(backend, AO.Client.ClientConnectionState.InWorld);
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var accept = listener.AcceptTcpClientAsync();
+        using var sender = new System.Net.Sockets.TcpClient();
+        sender.Connect(System.Net.IPAddress.Loopback, ((System.Net.IPEndPoint)listener.LocalEndpoint).Port);
+        using var receiver = accept.GetAwaiter().GetResult();
+        receiver.GetStream().ReadTimeout = 2000;
+        typeof(AORebirthBackend).GetField("_stream", flags)!.SetValue(backend, sender.GetStream());
+        var use = backend.UseItemAsync(slot);
+        byte[] wire = new byte[64];
+        receiver.GetStream().ReadExactly(wire);
+        Require(new BigEndianReader(wire, 16 + 37).ReadInt32() == 107
+            && new BigEndianReader(wire, 16 + 41).ReadInt32() == unchecked((60000 << 16) | 7), "native use sent through world transport with padding");
+        Require(!use.IsCompleted, "native use waits for the server reply");
+        int correlation = new BigEndianReader(wire, 16 + 25).ReadInt32();
+        var ack = AORebirthProtocol.CreateItemUse(18, 107, unchecked((60000 << 16) | 7), correlation);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(ack.AsSpan(16 + 13), 1);
+        var captureUse = typeof(AORebirthBackend).GetMethod("CaptureItemUseResult", flags)!;
+        var ackBody = new byte[45]; Array.Copy(ack, 16, ackBody, 0, 45);
+        captureUse.Invoke(backend, new object[] { new AORebirthPacket(10, 0, ackBody) });
+        use.GetAwaiter().GetResult();
+        Require(contents.Entries[0].Quantity == 5, "using item does not optimistically consume it");
+        var cast = AORebirthProtocol.CreateNanoCast(18, 123456, 50000, 18);
+        Require(cast.Length == 55 && new BigEndianReader(cast, 16 + 13).ReadInt32() == 0x13
+            && new BigEndianReader(cast, 16 + 33).ReadInt32() == 123456, "native CharacterAction cast fields");
+        using var duration = new MemoryStream();
+        WriteInt(duration, 0x5e477770); WriteInt(duration, 50000); WriteInt(duration, 18); duration.WriteByte(0);
+        WriteInt(duration, 0x62); WriteInt(duration, 0); WriteInt(duration, 53019); WriteInt(duration, 123456);
+        WriteInt(duration, 18); WriteInt(duration, 6000); WriteShort(duration, 0);
+        var land = new AORebirthPacket(10, 0, duration.ToArray());
+        Require(AORebirthProtocol.TryReadNanoEffect(land, 18, out var effect) && effect.NanoId == 123456
+            && effect.DurationCentiseconds == 6000, "server nano landing duration");
+        Require(!AORebirthProtocol.TryReadNanoEffect(land, 19, out _), "foreign nano landing ignored");
+        for (int length = 0; length < duration.Length; length++)
+            Require(!AORebirthProtocol.TryReadNanoEffect(new AORebirthPacket(10, 0, duration.ToArray()[..length]), 18, out _), "truncated nano landing ignored");
+        using var removal = new MemoryStream();
+        WriteInt(removal, 0x39343c68); WriteInt(removal, 50000); WriteInt(removal, 18); removal.WriteByte(0);
+        WriteShort(removal, 0); WriteInt(removal, 53019); WriteInt(removal, 123456);
+        Require(AORebirthProtocol.TryReadNanoEffect(new AORebirthPacket(10, 0, removal.ToArray()), 18, out var remove)
+            && remove.DurationCentiseconds == 0, "server buff removal");
+        bool rejected = false;
+        try { backend.UseItemAsync(new AO.Client.World.ItemLocation(AO.Client.World.ItemArea.Backpack, 8, 1234)).GetAwaiter().GetResult(); }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected && backend.PacketsSent == 1, "empty backpack slot rejected before transport");
+        var deniedUse = backend.UseItemAsync(slot);
+        byte[] deniedWire = new byte[64]; receiver.GetStream().ReadExactly(deniedWire);
+        captureUse.Invoke(backend, new object[] { new AORebirthPacket(10, 0, ackBody) });
+        Require(!deniedUse.IsCompleted, "late acknowledgement cannot complete another use");
+        var deniedBody = new byte[45]; Array.Copy(deniedWire, 16, deniedBody, 0, 45);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(deniedBody.AsSpan(13), 2);
+        captureUse.Invoke(backend, new object[] { new AORebirthPacket(10, 0, deniedBody) });
+        bool denied = false;
+        try { deniedUse.GetAwaiter().GetResult(); } catch (InvalidOperationException) { denied = true; }
+        Require(denied && contents.Entries[0].Quantity == 5, "server rejection surfaced without consuming an item");
+        backend.CancelNanoAsync(82834).GetAwaiter().GetResult();
+        byte[] cancelWire = new byte[56]; receiver.GetStream().ReadExactly(cancelWire);
+        Require(new BigEndianReader(cancelWire, 16 + 13).ReadInt32() == 0x41
+            && new BigEndianReader(cancelWire, 16 + 33).ReadInt32() == 82834,
+            "nano cancellation reaches the native world transport");
     }
 
     private static void TestFullCharacterState()

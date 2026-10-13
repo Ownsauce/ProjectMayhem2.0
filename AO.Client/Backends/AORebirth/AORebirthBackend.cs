@@ -53,6 +53,20 @@ namespace AO.Client.Backends.AORebirth
                 _available.Release();
             }
 
+            public bool TryRead(out AORebirthPacket packet)
+            {
+                packet = null;
+                if (!_available.Wait(0)) return false;
+                if (_packets.TryDequeue(out packet)) return true;
+                if (_completed)
+                {
+                    // Preserve the terminal wake-up for the next blocking read.
+                    _available.Release();
+                    throw _completionError ?? new EndOfStreamException("The AORebirth world packet stream ended.");
+                }
+                return false;
+            }
+
             public async Task<AORebirthPacket> ReadAsync(CancellationToken cancellationToken)
             {
                 while (true)
@@ -92,6 +106,15 @@ namespace AO.Client.Backends.AORebirth
         private readonly Dictionary<string, WorldObject> _worldObjects =
             new Dictionary<string, WorldObject>();
         private InventorySnapshot _inventory;
+        private readonly Dictionary<int, InventorySnapshot> _containerInventories = new();
+        private readonly List<InventorySnapshot> _changedContainerInventories = new();
+        private readonly List<NanoEffectUpdate> _nanoEffects = new();
+        private readonly List<CombatUpdate> _combatUpdates = new();
+        private readonly List<SpecialCooldownUpdate> _specialCooldowns = new();
+        private readonly SemaphoreSlim _itemUseGate = new(1, 1);
+        private TaskCompletionSource<int> _itemUseReply;
+        private int _itemUseCorrelation;
+        private int _nextItemUseCorrelation;
         private CharacterStateSnapshot _characterState;
         private bool _inventoryChanged;
         private bool _disposed;
@@ -120,6 +143,8 @@ namespace AO.Client.Backends.AORebirth
             BackendCapabilities.Authentication
             | BackendCapabilities.CharacterList
             | BackendCapabilities.CharacterSelection
+            | BackendCapabilities.Combat
+            | BackendCapabilities.ItemUse
             | BackendCapabilities.CharacterManagement
             | BackendCapabilities.WorldEntry
             | BackendCapabilities.WorldState
@@ -142,6 +167,9 @@ namespace AO.Client.Backends.AORebirth
 
             await CloseTransportAsync().ConfigureAwait(false);
             _inventory = null;
+            _nanoEffects.Clear(); _combatUpdates.Clear(); _specialCooldowns.Clear();
+            _containerInventories.Clear();
+            _changedContainerInventories.Clear();
             _characterState = null;
             _inventoryChanged = false;
             LastSelectedAppearanceDecodeFailure = null;
@@ -154,7 +182,7 @@ namespace AO.Client.Backends.AORebirth
             _sentInPlay = false;
             try
             {
-                _client = new TcpClient();
+                _client = new TcpClient { NoDelay = true };
                 using (cancellationToken.Register(() => _client?.Close()))
                 {
                     await _client.ConnectAsync(endpoint.Address.Host, endpoint.Address.Port).ConfigureAwait(false);
@@ -375,7 +403,7 @@ namespace AO.Client.Backends.AORebirth
 
                 await CloseTransportAsync().ConfigureAwait(false);
                 ConnectedEndpoint = $"{zone.Address}:{zone.Port}";
-                _client = new TcpClient();
+                _client = new TcpClient { NoDelay = true };
                 _messageId = 1;
                 using (cancellationToken.Register(() => _client?.Close()))
                 {
@@ -621,29 +649,28 @@ namespace AO.Client.Backends.AORebirth
             var packetKindsObserved = new Dictionary<string, int>();
             var packetSamplesObserved = new Dictionary<string, string>();
             WorldBootstrapResult zoneTransfer = null;
-            Stopwatch batchClock = Stopwatch.StartNew();
+            var batchClock = new Stopwatch();
             while (packetsObserved < maximumPackets
-                   && batchClock.Elapsed < TimeSpan.FromMilliseconds(100))
+                   && batchClock.Elapsed < TimeSpan.FromMilliseconds(4))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 AORebirthPacket packet;
-                using (var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                try
                 {
-                    idle.CancelAfter(packetsObserved > 0
-                        ? TimeSpan.FromMilliseconds(25)
-                        : TimeSpan.FromMilliseconds(750));
-                    try
+                    if (packetsObserved > 0)
                     {
+                        if (!_worldPackets.TryRead(out packet)) break;
+                    }
+                    else
+                    {
+                        using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        idle.CancelAfter(TimeSpan.FromMilliseconds(750));
                         packet = await ReadWorldPacketAsync(idle.Token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
-                    catch (IOException) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        break;
+                        batchClock.Start();
                     }
                 }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { break; }
+                catch (IOException) when (!cancellationToken.IsCancellationRequested) { break; }
                 packetsObserved++;
                 string packetKind;
                 if (packet.PacketType == AORebirthProtocol.N3PacketType
@@ -680,7 +707,7 @@ namespace AO.Client.Backends.AORebirth
                 }
                 ApplyWorldPacket(packet, deltas,
                     ref movementPacketsObserved, ref unmatchedMovementPackets);
-                if (AORebirthProtocol.TryReadChatText(packet, out string serverMessage))
+                if (AORebirthProtocol.TryReadChatText(packet, out string serverMessage) || AORebirthProtocol.TryReadFeedback(packet, out serverMessage))
                     serverMessages.Add(serverMessage);
             }
             InventorySnapshot inventory = _inventoryChanged ? _inventory : null;
@@ -693,7 +720,7 @@ namespace AO.Client.Backends.AORebirth
             return new WorldDeltaBatch(deltas, new List<NearbyEntity>(_worldEntities.Values),
                 packetsObserved, movementPacketsObserved, unmatchedMovementPackets,
                 packetKindsObserved, packetSamplesObserved, inventory, serverMessages,
-                zoneTransfer);
+                zoneTransfer, DrainContainerUpdates(), DrainNanoEffects(), DrainCombatUpdates(), DrainSpecialCooldowns());
         }
 
         private async Task<WorldBootstrapResult> ReconnectToZoneAsync(IPAddress address,
@@ -708,7 +735,7 @@ namespace AO.Client.Backends.AORebirth
             SetState(ClientConnectionState.EnteringWorld,
                 $"Zone redirect received; reconnecting to {address}:{port}.");
             await CloseTransportAsync().ConfigureAwait(false);
-            _client = new TcpClient();
+            _client = new TcpClient { NoDelay = true };
             _messageId = 1;
             _sentInPlay = false;
             using (cancellationToken.Register(() => _client?.Close()))
@@ -731,12 +758,71 @@ namespace AO.Client.Backends.AORebirth
             await WritePacketAsync(AORebirthProtocol.CreateCharInPlay(characterId),
                 cancellationToken).ConfigureAwait(false);
             _sentInPlay = true;
+            _nanoEffects.Clear(); _combatUpdates.Clear(); _specialCooldowns.Clear();
+            _containerInventories.Clear();
+            _changedContainerInventories.Clear();
             _worldEntities.Clear();
             _worldObjects.Clear();
             return bootstrap;
         }
 
         public InventorySnapshot GetInventorySnapshot() => _inventory;
+
+        public InventorySnapshot GetContainerInventorySnapshot(int containerInstance)
+            => _containerInventories.TryGetValue(containerInstance, out var snapshot) ? snapshot : null;
+
+        private IReadOnlyList<InventorySnapshot> DrainContainerUpdates()
+        {
+            var snapshots = _changedContainerInventories.ToArray();
+            _changedContainerInventories.Clear();
+            return snapshots;
+        }
+
+        public async Task UseItemAsync(ItemLocation location, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (location == null) throw new ArgumentNullException(nameof(location));
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null)
+                throw new InvalidOperationException("Enter the world before using items.");
+            int placement, page;
+            InventorySnapshot inventory;
+            if (location.Area == ItemArea.Backpack)
+            {
+                inventory = GetContainerInventorySnapshot(location.ContainerInstance);
+                int handle = inventory?.MainInventorySlot ?? 0;
+                if (handle <= 0 || handle > 65535) throw new InvalidOperationException("Open the backpack before using its contents.");
+                page = 107;
+                placement = unchecked((handle << 16) | location.Index);
+            }
+            else
+            {
+                page = location.Area == ItemArea.Inventory ? 104 : location.Area == ItemArea.Social ? 115 : 101 + (int)location.Area;
+                placement = AORebirthProtocol.ItemPlacement(location);
+                inventory = location.Area == ItemArea.Inventory ? _inventory : null;
+            }
+            bool found = false;
+            var entries = location.Area == ItemArea.Backpack || location.Area == ItemArea.Inventory
+                ? inventory?.Entries : _characterState?.Slots;
+            if (entries != null)
+                foreach (var entry in entries)
+                    if (entry != null && entry.Slot == (location.Area == ItemArea.Backpack ? location.Index : placement)) { found = true; break; }
+            if (!found) throw new InvalidOperationException("The server inventory has no item in that slot.");
+            await _itemUseGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                _itemUseCorrelation = Interlocked.Increment(ref _nextItemUseCorrelation);
+                var reply = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _itemUseReply = reply;
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(15));
+                using var registration = timeout.Token.Register(() => reply.TrySetCanceled());
+                await WritePacketAsync(AORebirthProtocol.CreateItemUse(int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture), page, placement, _itemUseCorrelation),
+                    cancellationToken).ConfigureAwait(false);
+                if (await reply.Task.ConfigureAwait(false) == 2)
+                    throw new InvalidOperationException("The server rejected item use. Check sitting state, skill requirements, and skill locks.");
+            }
+            finally { _itemUseReply = null; _itemUseGate.Release(); }
+        }
 
         public CharacterStateSnapshot GetCharacterStateSnapshot() => _characterState;
 
@@ -755,9 +841,19 @@ namespace AO.Client.Backends.AORebirth
 
         private void CaptureCharacterState(AORebirthPacket packet)
         {
+            if (_characterState != null && _selectedCharacter != null
+                && int.TryParse(_selectedCharacter.Id, out int uploadOwner)
+                && AORebirthProtocol.TryReadUploadedNano(packet, uploadOwner, out int nanoId))
+            {
+                var ids = new List<int>(_characterState.UploadedNanoIds);
+                if (!ids.Contains(nanoId)) ids.Add(nanoId);
+                _characterState = new CharacterStateSnapshot(_characterState.Slots, ids, _characterState.Stats, isStatUpdateOnly: true, equipmentRevision: _characterState.EquipmentRevision);
+                return;
+            }
             if (AORebirthProtocol.TryReadCharacterState(packet, out CharacterStateSnapshot snapshot))
             {
-                _characterState = snapshot;
+                _characterState = new CharacterStateSnapshot(snapshot.Slots, snapshot.UploadedNanoIds, snapshot.Stats,
+                    equipmentRevision: (_characterState?.EquipmentRevision ?? -1) + 1);
                 // FullCharacter carries the initial main page as well as worn slots.
                 var mainItems = new List<InventoryEntrySnapshot>();
                 foreach (var entry in snapshot.Slots)
@@ -783,21 +879,120 @@ namespace AO.Client.Backends.AORebirth
                 merged[pair.Key] = pair.Value;
             _characterState = new CharacterStateSnapshot(
                 _characterState.Slots, _characterState.UploadedNanoIds, merged,
-                isStatUpdateOnly: true);
+                isStatUpdateOnly: true, equipmentRevision: _characterState.EquipmentRevision);
+        }
+
+        private IReadOnlyList<NanoEffectUpdate> DrainNanoEffects()
+        {
+            var effects = _nanoEffects.ToArray(); _nanoEffects.Clear(); return effects;
+        }
+
+        private IReadOnlyList<CombatUpdate> DrainCombatUpdates()
+        {
+            var updates = _combatUpdates.ToArray(); _combatUpdates.Clear(); return updates;
+        }
+
+        private IReadOnlyList<SpecialCooldownUpdate> DrainSpecialCooldowns()
+        {
+            var result = _specialCooldowns.ToArray(); _specialCooldowns.Clear(); return result;
+        }
+
+        public Task UseSpecialAttackAsync(int statId, int targetType, int targetInstance, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null)
+                throw new InvalidOperationException("Enter the world before using a special.");
+            return WritePacketAsync(AORebirthProtocol.CreateSpecialAttackRequest(
+                int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture), statId, targetType, targetInstance), cancellationToken);
+        }
+
+        public Task SetAttackTargetAsync(int targetType, int targetInstance, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null)
+                throw new InvalidOperationException("Enter the world before attacking.");
+            return WritePacketAsync(AORebirthProtocol.CreateAttackRequest(
+                int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture), targetType, targetInstance), cancellationToken);
+        }
+
+        public Task CancelNanoAsync(int nanoId, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null)
+                throw new InvalidOperationException("Enter the world before cancelling a nano.");
+            return WritePacketAsync(AORebirthProtocol.CreateNanoCancel(
+                int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture), nanoId), cancellationToken);
+        }
+
+        public Task CastNanoAsync(int nanoId, int targetType, int targetInstance, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null) throw new InvalidOperationException("Enter the world before casting.");
+            if (_characterState == null || !new List<int>(_characterState.UploadedNanoIds).Contains(nanoId)) throw new InvalidOperationException("Program is not uploaded.");
+            return WritePacketAsync(AORebirthProtocol.CreateNanoCast(int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture), nanoId, targetType, targetInstance), cancellationToken);
+        }
+
+        private void CaptureItemUseResult(AORebirthPacket packet)
+        {
+            if (_selectedCharacter != null && int.TryParse(_selectedCharacter.Id, out int owner)
+                && AORebirthProtocol.TryReadItemUseResult(packet, owner, out int correlation, out int result)
+                && correlation == _itemUseCorrelation) _itemUseReply?.TrySetResult(result);
         }
 
         private void CaptureInventory(AORebirthPacket packet)
         {
-            if (!AORebirthProtocol.TryReadInventoryUpdate(packet, out InventorySnapshot snapshot)
-                || !snapshot.IsMainInventory)
+            if (AORebirthProtocol.TryReadInventoryUpdate(packet, out InventorySnapshot snapshot))
+            {
+                if (snapshot.IsMainInventory) { _inventory = snapshot; _inventoryChanged = true; }
+                else if (snapshot.ContainerType == 51017 && snapshot.ContainerInstance > 0)
+                {
+                    _containerInventories[snapshot.ContainerInstance] = snapshot;
+                    _changedContainerInventories.Add(snapshot);
+                }
                 return;
-            _inventory = snapshot;
-            _inventoryChanged = true;
+            }
+            if (_selectedCharacter != null && int.TryParse(_selectedCharacter.Id, out int owner)
+                && AORebirthProtocol.TryReadContainerOpen(packet, owner, out int containerId)
+                && _containerInventories.TryGetValue(containerId, out var known))
+                _changedContainerInventories.Add(known);
         }
 
         private void ApplyWorldPacket(AORebirthPacket packet, List<WorldEntityDelta> deltas,
             ref int movementPacketsObserved, ref int unmatchedMovementPackets)
         {
+            if (AORebirthProtocol.TryReadCombatUpdate(packet, out var combat))
+            {
+                _combatUpdates.Add(combat);
+                if (combat.Kind == CombatUpdateKind.Hit)
+                {
+                    if (combat.TargetType == 50000 && _characterState != null
+                        && _selectedCharacter != null && _selectedCharacter.Id == combat.TargetInstance.ToString(CultureInfo.InvariantCulture)
+                        && _characterState.Stats.TryGetValue(27, out int currentSelfHealth))
+                    {
+                        var stats = new Dictionary<int, int>(_characterState.Stats);
+                        stats[27] = Math.Max(0, currentSelfHealth - combat.Damage);
+                        _characterState = new CharacterStateSnapshot(_characterState.Slots,
+                            _characterState.UploadedNanoIds, stats, isStatUpdateOnly: true,
+                            equipmentRevision: _characterState.EquipmentRevision);
+                    }
+                    string targetKey = EntityKey(combat.TargetType, combat.TargetInstance);
+                    if (_worldEntities.TryGetValue(targetKey, out var target))
+                    {
+                        var changed = target.WithHealth(target.Health,
+                            Math.Max(0, target.Health - target.HealthDamage - combat.Damage));
+                        _worldEntities[targetKey] = changed;
+                        deltas.Add(new WorldEntityDelta(WorldEntityDeltaKind.Stats,
+                            combat.TargetType, combat.TargetInstance, changed));
+                    }
+                }
+                return;
+            }
+            if (_selectedCharacter != null && int.TryParse(_selectedCharacter.Id, out int cooldownOwner)
+                && AORebirthProtocol.TryReadSpecialCooldown(packet, cooldownOwner, out var cooldown))
+                _specialCooldowns.Add(cooldown);
+            CaptureItemUseResult(packet);
+            if (_selectedCharacter != null && int.TryParse(_selectedCharacter.Id, out int effectOwner)
+                && AORebirthProtocol.TryReadNanoEffect(packet, effectOwner, out var effect)) _nanoEffects.Add(effect);
             CaptureInventory(packet);
             CaptureCharacterState(packet);
             if (_selectedCharacter != null
@@ -944,6 +1139,9 @@ namespace AO.Client.Backends.AORebirth
             _selectedCharacter = null;
             _currentPlayfieldId = 0;
             _bootstrapServerMessages.Clear();
+            _nanoEffects.Clear(); _combatUpdates.Clear(); _specialCooldowns.Clear();
+            _containerInventories.Clear();
+            _changedContainerInventories.Clear();
             _worldEntities.Clear();
             _worldObjects.Clear();
             SetState(ClientConnectionState.Disconnected, "Disconnected.");
@@ -965,6 +1163,9 @@ namespace AO.Client.Backends.AORebirth
             _selectedCharacter = null;
             _currentPlayfieldId = 0;
             _bootstrapServerMessages.Clear();
+            _nanoEffects.Clear(); _combatUpdates.Clear(); _specialCooldowns.Clear();
+            _containerInventories.Clear();
+            _changedContainerInventories.Clear();
             _worldEntities.Clear();
             _worldObjects.Clear();
             State = ClientConnectionState.Disconnected;

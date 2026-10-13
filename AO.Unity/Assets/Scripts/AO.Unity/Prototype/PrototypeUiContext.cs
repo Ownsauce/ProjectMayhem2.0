@@ -416,6 +416,80 @@ namespace AO.Unity.Prototype
         private bool _hasNativeEquipment;
         private int _nativeMoveVersion;
         private bool _nativeMovePending;
+        private long _requestedNativeBackpack;
+        private readonly HashSet<string> _nativeUsesPending = new();
+
+        private async void SendNativeItemUse(ItemLocation location, string label)
+        {
+            if (location == null || ServerSession == null) { SetStatus("Item use requires a connected server."); return; }
+            string key = $"{location.Area}:{location.ContainerInstance}:{location.Index}";
+            if (!_nativeUsesPending.Add(key)) return;
+            try
+            {
+                await ServerSession.UseItemAsync(location);
+                SetStatus($"Server accepted {label}.");
+                if (label == "backpack open") _ = ExpireNativeBackpackRequestAsync(_requestedNativeBackpack);
+                if (!label.StartsWith("backpack", StringComparison.Ordinal)) await System.Threading.Tasks.Task.Delay(500);
+            }
+            catch (Exception exception)
+            {
+                if (label == "backpack open") _requestedNativeBackpack = 0;
+                SetStatus($"{label} failed: {exception.Message}");
+            }
+            finally { _nativeUsesPending.Remove(key); }
+        }
+
+        private async System.Threading.Tasks.Task ExpireNativeBackpackRequestAsync(long instanceId)
+        {
+            if (instanceId == 0) return;
+            await System.Threading.Tasks.Task.Delay(15000);
+            if (_requestedNativeBackpack != instanceId) return;
+            _requestedNativeBackpack = 0;
+            SetStatus("No backpack contents received. Check server messages and try opening it again.");
+        }
+
+        private ItemLocation NativeUseLocation(SlotZone zone, int index)
+            => zone == SlotZone.Inventory ? new ItemLocation(ItemArea.Inventory, index)
+                : zone == SlotZone.Backpack && OpenBackpackId > 0 && OpenBackpackId <= int.MaxValue
+                    ? new ItemLocation(ItemArea.Backpack, index, (int)OpenBackpackId) : null;
+
+        private ItemLocation FindNativeUseLocation(long instanceId)
+        {
+            for (int i = 0; i < Character.Inventory.Main.Capacity; i++)
+                if (Character.Inventory.Main.Slots[i]?.InstanceId == instanceId) return new ItemLocation(ItemArea.Inventory, i);
+            foreach (var pair in GetEquipped()) if (pair.Value == instanceId) return NativeWearLocation(pair.Key);
+            return null;
+        }
+
+        private void ApplyServerContainerInventory(InventorySnapshot snapshot)
+        {
+            if (snapshot.ContainerType != 51017 || snapshot.ContainerInstance <= 0 || snapshot.Capacity < 0 || snapshot.Capacity > 1024) return;
+            var container = Character.Inventory.SetAuthoritativeContainerCapacity(snapshot.ContainerInstance, snapshot.Capacity);
+            for (int i = 0; i < container.Capacity; i++) container.TryRemoveAt(i, out _);
+            foreach (var entry in snapshot.Entries)
+            {
+                if (entry == null || entry.Slot < 0 || entry.Slot >= container.Capacity) continue;
+                try
+                {
+                    if (AOItemObjectResolver.TryResolve(entry.LowId, entry.HighId, entry.Quality, out var raw))
+                        AODataManager.Instance.RegisterRuntimeItem(raw, entry.LowId, entry.HighId);
+                    int aoid = entry.HighId > 0 ? entry.HighId : entry.LowId;
+                    var definition = AODataManager.Instance.GetCoreDefinition(aoid) ?? AODataManager.Instance.GetCoreDefinition(entry.LowId);
+                    if (definition == null) continue;
+                    long id = entry.IdentityInstance != 0 ? entry.IdentityInstance : ((long)snapshot.ContainerInstance << 32) | (uint)(entry.Slot + 1);
+                    AODataManager.Instance.RegisterRuntimeInstance(definition, id, entry.Quantity);
+                    container.TrySetAt(entry.Slot, new ItemInstance(definition, entry.Quantity, id));
+                }
+                catch (Exception exception) { Debug.LogWarning($"[Inventory] Container item resolution failed: {exception.Message}"); }
+            }
+            if (_requestedNativeBackpack == snapshot.ContainerInstance)
+            {
+                OpenBackpackId = snapshot.ContainerInstance;
+                _requestedNativeBackpack = 0;
+                SetStatus("Backpack contents received.");
+            }
+            NotifyStateChanged();
+        }
         private bool HasNativeSession => _hasNativeInventory
             || (ServerSession != null && ServerSession.IsAuthenticated);
 
@@ -423,7 +497,18 @@ namespace AO.Unity.Prototype
         {
             _hasNativeInventory = false;
             _hasNativeEquipment = false;
+            _appliedNativeEquipmentRevision = -1;
             _nativeMovePending = false;
+            _requestedNativeBackpack = 0;
+            _nativeUsesPending.Clear();
+            _nativeNanoCancelsPending.Clear();
+            ++_nativeNanoCancelEpoch;
+            _nativeSpecialReadyAt.Clear();
+            _nativeSpecialRequestAt.Clear();
+            _nativeAttackTargetType = 0;
+            _nativeAttackTargetInstance = 0;
+            _activePrograms.Clear();
+            _runtimeBridge?.GetComponent<CharacterAppearanceController>()?.SetServerAttackActive(false);
             ++_nativeMoveVersion;
         }
 
@@ -508,8 +593,8 @@ namespace AO.Unity.Prototype
 
         public void ApplyServerInventory(InventorySnapshot snapshot)
         {
-            if (snapshot == null || !snapshot.IsMainInventory || Character?.Inventory == null)
-                return;
+            if (snapshot == null || Character?.Inventory == null) return;
+            if (!snapshot.IsMainInventory) { ApplyServerContainerInventory(snapshot); return; }
 
             _hasNativeInventory = true;
             _nativeMovePending = false;
@@ -555,17 +640,19 @@ namespace AO.Unity.Prototype
                 long instanceId = entry.IdentityInstance != 0
                     ? entry.IdentityInstance
                     : ((long)aoid << 16) | (uint)guiSlot;
-                int containerCapacity = AODataManager.Instance.GetCoreInstance(definition.AOID)?.ContainerCapacity ?? 0;
+                int containerCapacity = entry.IdentityType == 51017 ? 21 : AODataManager.Instance.GetCoreInstance(definition.AOID)?.ContainerCapacity ?? 0;
                 AODataManager.Instance.RegisterRuntimeInstance(
                     definition, instanceId, entry.Quantity, containerCapacity);
                 var item = new ItemInstance(definition, entry.Quantity, instanceId, containerCapacity);
                 if (Character.Inventory.TrySetMainSlot(guiSlot, item))
                     loaded++;
             }
-            OpenBackpackId = 0;
+            if (OpenBackpackId != 0 && !Character.Inventory.Main.Slots.Any(item => item?.InstanceId == OpenBackpackId)) OpenBackpackId = 0;
             NotifyStateChanged();
             SetStatus($"Server inventory synchronized: {loaded}/{snapshot.Capacity} slots.");
         }
+
+        private long _appliedNativeEquipmentRevision = -1;
 
         public void ApplyServerCharacterState(CharacterStateSnapshot snapshot)
         {
@@ -575,8 +662,10 @@ namespace AO.Unity.Prototype
             // A stat delta retains the last FullCharacter slots. If initial UI
             // hydration missed the full snapshot, use those retained slots once
             // before treating subsequent packets as stats-only updates.
-            if (snapshot.IsStatUpdateOnly && _hasNativeEquipment)
+            if (snapshot.IsStatUpdateOnly && _hasNativeEquipment
+                && snapshot.EquipmentRevision == _appliedNativeEquipmentRevision)
             {
+                if (!_uploadedProgramIds.SetEquals(snapshot.UploadedNanoIds)) ApplyServerUploadedPrograms(snapshot.UploadedNanoIds);
                 Character.ApplyAuthoritativeStats(snapshot.Stats,
                     statId => AODataManager.Instance?.GetStatName(statId));
                 NotifyStateChanged();
@@ -624,6 +713,7 @@ namespace AO.Unity.Prototype
             }
             Character.ApplyAuthoritativeEquipment(equipped);
             _hasNativeEquipment = true;
+            _appliedNativeEquipmentRevision = snapshot.EquipmentRevision;
             Character.ApplyAuthoritativeStats(snapshot.Stats,
                 statId => AODataManager.Instance?.GetStatName(statId));
             ApplyServerUploadedPrograms(snapshot.UploadedNanoIds);
@@ -1071,7 +1161,7 @@ namespace AO.Unity.Prototype
             if ((canFlags & UseCanBit) == 0)
                 return false;
 
-            if (HasNativeSession) { SetStatus("Server item use is not connected yet."); return true; }
+            if (HasNativeSession) { SendNativeItemUse(NativeUseLocation(zone, slotIndex), $"use of {item.Definition?.Name}"); return true; }
 
             if (!CanUseItemNow(raw, out string blockReason))
             {
@@ -1384,6 +1474,15 @@ namespace AO.Unity.Prototype
 
         public int GetProgramNcuCost(int nanoId)
         {
+            if (HasNativeSession)
+            {
+                var raw = ResolveRawNanoByProgramId(nanoId);
+                int flags = raw?.StatValues?.FirstOrDefault(value => value != null && value.Stat == 0)?.RawValue ?? 0;
+                int can = GetRawStatValue(raw, CanFlagStatId);
+                if ((flags & ((1 << 8) | (1 << 15))) != 0
+                    || ((can & (1 << 22)) != 0 && (can & ((1 << 21) | (1 << 23))) == 0)) return 0;
+                return Mathf.Max(0, GetRawStatValue(raw, NcuCostStatId));
+            }
             int primary = Mathf.Max(0, GetProgramStatValueAcrossChain(nanoId, NcuCostStatIdPrimary));
             if (primary > 0)
                 return primary;
@@ -1428,13 +1527,20 @@ namespace AO.Unity.Prototype
         {
             UpdateActiveProgramsInternal();
             int used = 0;
-            for (int i = 0; i < _activePrograms.Count; i++)
-                used += Mathf.Max(0, _activePrograms[i].NcuCost);
+            foreach (var program in _activePrograms) used += Mathf.Max(0, program.NcuCost);
+            if (HasNativeSession && Character?.StatsContainer?.HasBaseStat(180) == true)
+                used = Mathf.Max(used, Character.StatsContainer.GetBaseStat(180));
             return used;
         }
 
         public int GetCurrentNcuCapacity()
         {
+            if (HasNativeSession)
+            {
+                // Server stats are totals. The equipment fallback must not add them twice.
+                int serverTotal = Character?.StatsContainer?.GetBaseStat(MaxNcuStatId) ?? 0;
+                return Mathf.Max(serverTotal, DefaultMaxNcuCapacity + Mathf.Max(0, GetEquippedItemModifierSum(MaxNcuStatId)));
+            }
             int fromStatsFinal = Character?.StatsContainer?.GetFinalStat(MaxNcuStatId) ?? 0;
             int fromStatsModified = Character?.StatsContainer?.GetModifiedStat(MaxNcuStatId) ?? 0;
             int fromEquipped = Mathf.Max(0, GetEquippedItemModifierSum(MaxNcuStatId));
@@ -1442,7 +1548,7 @@ namespace AO.Unity.Prototype
             int explicitCapacity = Mathf.Max(0, Mathf.Max(fromStatsFinal, fromStatsModified));
             int fallbackCapacity = DefaultMaxNcuCapacity + fromEquipped;
             int baseCapacity = explicitCapacity > 0 ? Mathf.Max(explicitCapacity, fallbackCapacity) : fallbackCapacity;
-            return Mathf.Max(1, baseCapacity + fromPrograms);
+            return Mathf.Max(DefaultMaxNcuCapacity, baseCapacity + fromPrograms);
         }
 
         public string GetProgramSchoolTabName(int nanoId)
@@ -1551,8 +1657,48 @@ namespace AO.Unity.Prototype
             return true;
         }
 
+        private async void SendNativeNanoCast(int nanoId)
+        {
+            try
+            {
+                if (!int.TryParse(ServerSession.CurrentCharacterId, out int selfId))
+                    throw new InvalidOperationException("No controlled character is available.");
+                var raw = ResolveRawNanoByProgramId(nanoId);
+                int can = GetRawStatValue(raw, CanFlagStatId);
+                int flags = raw?.StatValues?.FirstOrDefault(value => value != null && value.Stat == 0)?.RawValue ?? 0;
+                var target = NanoCastTargetPolicy.Resolve(selfId, can, flags, _selectedTarget?.ServerEntity);
+                int type = target.IdentityType, id = target.IdentityInstance;
+                Debug.Log($"[AO.Client] Nano request: nano={nanoId}, target={type}:{id}, self={selfId}.");
+                await ServerSession.CastNanoAsync(nanoId, type, id);
+                SetStatus("Nano cast requested; waiting for server execution.");
+            }
+            catch (Exception exception) { SetStatus($"Cast failed: {exception.Message}"); }
+        }
+
+        public void ApplyServerNanoEffect(NanoEffectUpdate effect)
+        {
+            if (effect == null) return;
+            if (effect.DurationCentiseconds == 0 && _nativeNanoCancelsPending.Remove(effect.NanoId))
+            {
+                string name = _activePrograms.FirstOrDefault(program => program.NanoId == effect.NanoId)?.Name ?? $"Nano {effect.NanoId}";
+                SetStatus($"Server confirmed cancellation of {name}.");
+            }
+            _activePrograms.RemoveAll(program => program.NanoId == effect.NanoId);
+            if (effect.DurationCentiseconds > 0)
+            {
+                var program = BuildUploadedProgram(effect.NanoId, null, null);
+                _activePrograms.Add(new ActiveNanoProgram { ActiveId = _nextActiveProgramId++, NanoId = effect.NanoId,
+                    RawNanoAoid = program.RawNanoAoid, Name = program.Name, Description = program.Description, IconId = program.IconId,
+                    NcuCost = GetProgramNcuCost(effect.NanoId), StartedAt = Time.unscaledTime,
+                    DurationSeconds = effect.DurationCentiseconds / 100f });
+            }
+            NotifyStateChanged();
+        }
+
         public bool RequestProgramCast(int nanoId)
         {
+            if (HasNativeSession) { SendNativeNanoCast(nanoId); return true; }
+
             var uploaded = _uploadedPrograms.FirstOrDefault(p => p != null && p.NanoId == nanoId);
             if (uploaded == null)
             {
@@ -1623,6 +1769,8 @@ namespace AO.Unity.Prototype
 
         public bool TryCastUploadedProgram(int nanoId)
         {
+            if (HasNativeSession) { SendNativeNanoCast(nanoId); return true; }
+
             var uploaded = _uploadedPrograms.FirstOrDefault(p => p != null && p.NanoId == nanoId);
             if (uploaded == null)
             {
@@ -1848,6 +1996,30 @@ namespace AO.Unity.Prototype
             return $"{visualId}: {name}";
         }
 
+        private readonly HashSet<int> _nativeNanoCancelsPending = new();
+        private int _nativeNanoCancelEpoch;
+
+        private async void SendNativeNanoCancel(int nanoId, string name)
+        {
+            int epoch = _nativeNanoCancelEpoch;
+            if (!_nativeNanoCancelsPending.Add(nanoId)) return;
+            try
+            {
+                await ServerSession.CancelNanoAsync(nanoId);
+                if (epoch != _nativeNanoCancelEpoch || !_nativeNanoCancelsPending.Contains(nanoId)) return;
+                SetStatus($"Cancellation requested for {name}; waiting for server confirmation.");
+                await System.Threading.Tasks.Task.Delay(10000);
+                if (epoch == _nativeNanoCancelEpoch && _nativeNanoCancelsPending.Remove(nanoId))
+                    SetStatus($"The server has not confirmed cancellation of {name}.");
+            }
+            catch (Exception exception)
+            {
+                if (epoch != _nativeNanoCancelEpoch) return;
+                _nativeNanoCancelsPending.Remove(nanoId);
+                SetStatus($"Cancellation failed: {exception.Message}");
+            }
+        }
+
         public bool TryCancelActiveProgram(int activeId)
         {
             UpdateActiveProgramsInternal();
@@ -1856,6 +2028,11 @@ namespace AO.Unity.Prototype
                 return false;
 
             string name = _activePrograms[index].Name;
+            if (HasNativeSession)
+            {
+                SendNativeNanoCancel(_activePrograms[index].NanoId, name);
+                return true;
+            }
             _activePrograms.RemoveAt(index);
             SetStatus($"Cancelled {name}.");
             NotifyStateChanged();
@@ -1879,6 +2056,8 @@ namespace AO.Unity.Prototype
             if (OpenBackpackId == 0)
                 return;
 
+            if (HasNativeSession) SendNativeItemUse(FindNativeUseLocation(OpenBackpackId), "backpack close");
+            _requestedNativeBackpack = 0;
             OpenBackpackId = 0;
             SetStatus("Closed backpack.");
             NotifyStateChanged();
@@ -2170,9 +2349,107 @@ namespace AO.Unity.Prototype
             return Mathf.Max(0, rating);
         }
 
+        public bool IsNativeGameplay => HasNativeSession;
+        private readonly Dictionary<int, float> _nativeSpecialReadyAt = new();
+        private readonly Dictionary<int, float> _nativeSpecialRequestAt = new();
+        private static readonly (int Stat, int CanBit, string Name)[] NativeSpecials =
+        {
+            (142, 25, "Brawl"), (144, 26, "Dimach"), (146, 17, "Sneak Attack"),
+            (147, 18, "Fast Attack"), (148, 11, "Burst"), (150, 12, "Fling Shot"),
+            (151, 14, "Aimed Shot"), (167, 13, "Full Auto")
+        };
+
+        public static string GetSpecialName(int statId)
+        {
+            foreach (var special in NativeSpecials) if (special.Stat == statId) return special.Name;
+            return $"Special {statId}";
+        }
+
+        public List<int> GetNativeWeaponSpecials()
+        {
+            var result = new List<int>();
+            if (!HasNativeSession || Character == null || AODataManager.Instance == null) return result;
+            uint can = 0;
+            var equipped = GetEquipped();
+            foreach (int slot in new[] { RightHandSlotId, LeftHandSlotId })
+            {
+                if (!equipped.TryGetValue(slot, out long id)) continue;
+                var instance = AODataManager.Instance.GetCoreInstance(id);
+                var raw = AODataManager.Instance.GetRawItemByAoid(instance?.Definition?.AOID ?? 0);
+                can |= unchecked((uint)GetRawStatValue(raw, CanFlagStatId));
+            }
+            foreach (var special in NativeSpecials)
+                if ((can & (1u << special.CanBit)) != 0) result.Add(special.Stat);
+            return result;
+        }
+
+        public float GetNativeSpecialRemaining(int statId)
+            => _nativeSpecialReadyAt.TryGetValue(statId, out float ready) ? Mathf.Max(0f, ready - Time.unscaledTime) : 0f;
+
+        public void ApplyServerSpecialCooldown(SpecialCooldownUpdate cooldown)
+        {
+            _nativeSpecialRequestAt.Remove(cooldown.StatId);
+            _nativeSpecialReadyAt[cooldown.StatId] = Time.unscaledTime + cooldown.Seconds;
+            NotifyStateChanged();
+        }
+
+        public void ApplyServerSpecialLockNotice(string message)
+        {
+            var match = Regex.Match(message ?? string.Empty,
+                @"([A-Za-z ]+) skill is locked, able in (\d+):(\d+):(\d+)");
+            if (!match.Success) return;
+            string name = match.Groups[1].Value.Trim().Replace(" ", string.Empty);
+            foreach (var special in NativeSpecials)
+                if (string.Equals(name, special.Name.Replace(" ", string.Empty), StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!int.TryParse(match.Groups[2].Value, out int hours)
+                        || !int.TryParse(match.Groups[3].Value, out int minutes)
+                        || !int.TryParse(match.Groups[4].Value, out int seconds)) return;
+                    long total = hours * 3600L + minutes * 60L + seconds;
+                    if (total > int.MaxValue) return;
+                    ApplyServerSpecialCooldown(new SpecialCooldownUpdate(special.Stat, (int)total));
+                    break;
+                }
+        }
+
+        public bool TryUseNativeSpecial(int statId)
+        {
+            if (!HasNativeSession) return false;
+            string name = GetSpecialName(statId);
+            var target = _selectedTarget?.ServerEntity;
+            if (target == null || (target.IdentityType == 50000 && target.IdentityInstance.ToString() == ServerSession.CurrentCharacterId))
+            { SetStatus($"{name} needs a hostile target."); return false; }
+            if (!GetNativeWeaponSpecials().Contains(statId))
+            { SetStatus($"{name} is unavailable on the equipped weapon."); return false; }
+            float remaining = GetNativeSpecialRemaining(statId);
+            if (remaining > 0f) { SetStatus($"{name} ready in {Mathf.CeilToInt(remaining)}s."); return false; }
+            if (_nativeSpecialRequestAt.TryGetValue(statId, out float sent) && Time.unscaledTime - sent < 1f) return false;
+            _nativeSpecialRequestAt[statId] = Time.unscaledTime;
+            _nativeAttackTargetType = target.IdentityType;
+            _nativeAttackTargetInstance = target.IdentityInstance;
+            _runtimeBridge?.GetComponent<CharacterAppearanceController>()?.SetServerAttackActive(true);
+            SendNativeSpecial(statId, target.IdentityType, target.IdentityInstance);
+            return true;
+        }
+
+        private async void SendNativeSpecial(int statId, int type, int id)
+        {
+            try
+            {
+                await ServerSession.UseSpecialAttackAsync(statId, type, id);
+                SetStatus($"{GetSpecialName(statId)} requested.");
+            }
+            catch (Exception exception)
+            {
+                _nativeSpecialRequestAt.Remove(statId);
+                SetStatus($"{GetSpecialName(statId)} failed: {exception.Message}");
+            }
+        }
+
         public bool TryUseBurstSpecial(out int totalDamage)
         {
             totalDamage = 0;
+            if (HasNativeSession) return TryUseNativeSpecial(148);
             if (!TryResolveSpecialWeapon(out var weapon, out int mbs, out string failReason))
             {
                 SetStatus(failReason);
@@ -2236,6 +2513,7 @@ namespace AO.Unity.Prototype
         public bool TryUseFlingShotSpecial(out int damage)
         {
             damage = 0;
+            if (HasNativeSession) return TryUseNativeSpecial(150);
             if (!TryResolveSpecialWeapon(out var weapon, out int mbs, out string failReason))
             {
                 SetStatus(failReason);
@@ -2278,8 +2556,55 @@ namespace AO.Unity.Prototype
             return true;
         }
 
+        private int _nativeAttackTargetType;
+        private int _nativeAttackTargetInstance;
+
+        public void ApplyServerAttackState(CombatUpdate combat)
+        {
+            bool active = combat.Kind == CombatUpdateKind.Started;
+            if (active && (combat.TargetInstance != _nativeAttackTargetInstance
+                || combat.TargetType != _nativeAttackTargetType))
+            {
+                // A start reply may arrive after Q was pressed again or the target changed.
+                if (_nativeAttackTargetInstance == 0) SendNativeAttack(0, 0);
+                return;
+            }
+            if (!active) { _nativeAttackTargetType = 0; _nativeAttackTargetInstance = 0; }
+            _runtimeBridge?.GetComponent<CharacterAppearanceController>()?.SetServerAttackActive(active);
+        }
+
+        private async void SendNativeAttack(int type, int id)
+        {
+            try { await ServerSession.SetAttackTargetAsync(type, id); }
+            catch (Exception exception)
+            {
+                if (_nativeAttackTargetInstance == id && _nativeAttackTargetType == type)
+                {
+                    _nativeAttackTargetInstance = 0;
+                    _runtimeBridge?.GetComponent<CharacterAppearanceController>()?.SetServerAttackActive(false);
+                }
+                SetStatus($"Attack failed: {exception.Message}");
+            }
+        }
+
         public void TickAutoAttack(bool attackActive)
         {
+            if (HasNativeSession)
+            {
+                var nativeAppearance = _runtimeBridge?.GetComponent<CharacterAppearanceController>();
+                var target = attackActive && nativeAppearance?.IsSitting != true ? _selectedTarget?.ServerEntity : null;
+                int id = target?.IdentityInstance ?? 0;
+                int type = target?.IdentityType ?? 0;
+                if (id > 0 && ((type == 50000 && id.ToString() == ServerSession.CurrentCharacterId) || (target.Health > 0 && target.Health <= target.HealthDamage))) id = 0;
+                if (id == 0 && attackActive && nativeAppearance?.IsSitting != true) nativeAppearance?.SetServerAttackActive(false);
+                if (id != _nativeAttackTargetInstance || (id > 0 && type != _nativeAttackTargetType))
+                {
+                    _nativeAttackTargetType = type;
+                    _nativeAttackTargetInstance = id;
+                    SendNativeAttack(type, id);
+                }
+                return;
+            }
             if (!attackActive || Character == null || _selectedTarget == null)
             {
                 _pendingAutoAttackImpactAt = -1f;
@@ -3986,7 +4311,12 @@ namespace AO.Unity.Prototype
                 return false;
             }
 
-            if (HasNativeSession) { SetStatus("Server nano uploading is not connected yet."); return true; }
+            if (HasNativeSession)
+            {
+                var location = sourceZone.HasValue ? NativeUseLocation(sourceZone.Value, sourceIndex) : FindNativeUseLocation(instanceId);
+                SendNativeItemUse(location, $"upload of {dataItem.Definition.Name}");
+                return true;
+            }
 
             if (_uploadedProgramIds.Contains(nanoId))
             {
@@ -4486,8 +4816,21 @@ namespace AO.Unity.Prototype
 
                 foreach (var spell in group.Items)
                 {
-                    if (spell == null || spell.Stat <= 0)
+                    if (spell == null) continue;
+                    if (spell.Stat <= 0)
+                    {
+                        if (!string.IsNullOrWhiteSpace(spell.SpellDescription))
+                        {
+                            string effectName = Regex.Replace(spell.SpellDescription, "([a-z])([A-Z])", "$1 $2");
+                            if (spell.NanoID > 0)
+                            {
+                                var linked = ResolveRawNanoByProgramId(spell.NanoID);
+                                effectName += ": " + (linked?.Name ?? $"Nano {spell.NanoID}");
+                            }
+                            effects.Add(effectName);
+                        }
                         continue;
+                    }
 
                     string statName = AODataManager.Instance.GetStatName(spell.Stat);
                     if (string.IsNullOrWhiteSpace(statName))
@@ -4514,7 +4857,8 @@ namespace AO.Unity.Prototype
                     }
                     else
                     {
-                        effects.Add($"{statName} {amountText}");
+                        effects.Add($"{statName} {amountText}" +
+                            (spell.SpellDescription == "ModifyLevelScaling" ? " (scales with level)" : string.Empty));
                     }
                 }
             }
@@ -4529,6 +4873,7 @@ namespace AO.Unity.Prototype
         {
             if (active == null)
                 return "None";
+            if (HasNativeSession) return ResolveNanoEffectText(ResolveRawNanoByProgramId(active.NanoId));
 
             var lines = new List<string>();
             if (active.StatModifiers != null)
@@ -5761,7 +6106,17 @@ namespace AO.Unity.Prototype
 
         private void ToggleBackpack(long instanceId, string fallbackName)
         {
-            if (HasNativeSession) { SetStatus("Server backpack contents are not connected yet."); return; }
+            if (HasNativeSession)
+            {
+                var location = FindNativeUseLocation(instanceId);
+                if (location == null) { SetStatus("Backpack must be carried or equipped to open it."); return; }
+                bool closing = OpenBackpackId == instanceId;
+                if (closing) { CloseOpenBackpack(); return; }
+                if (_requestedNativeBackpack == instanceId) { SetStatus("Waiting for backpack contents."); return; }
+                _requestedNativeBackpack = instanceId;
+                SendNativeItemUse(location, "backpack open");
+                return;
+            }
             if (OpenBackpackId == instanceId)
             {
                 CloseOpenBackpack();
@@ -6188,9 +6543,14 @@ namespace AO.Unity.Prototype
                 return null;
 
             var direct = AODataManager.Instance.GetRawNanoByAoid(programId);
-            if (direct != null)
+            if (direct != null && (!HasNativeSession || GetRawStatValue(direct, 79) > 0))
                 return direct;
 
+            if (AOItemObjectResolver.TryResolveNano(programId, out var installedNano))
+            {
+                AODataManager.Instance.RegisterRuntimeNano(installedNano);
+                return installedNano;
+            }
             var nanos = AODataManager.Instance.NanoItems;
             if (nanos == null || nanos.Count == 0)
                 return null;
@@ -6227,6 +6587,7 @@ namespace AO.Unity.Prototype
                 return 0;
 
             int best = Mathf.Max(0, GetRawStatValue(raw, statId));
+            if (HasNativeSession) return best;
             var chain = ResolveNanoExecutionChain(raw);
             for (int i = 0; i < chain.Count; i++)
             {

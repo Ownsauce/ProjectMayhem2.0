@@ -17,6 +17,7 @@ namespace AO.Client
         Combat = 1 << 8,
         Quests = 1 << 9,
         ItemMovement = 1 << 10,
-        CharacterManagement = 1 << 11
+        CharacterManagement = 1 << 11,
+        ItemUse = 1 << 12
     }
 }

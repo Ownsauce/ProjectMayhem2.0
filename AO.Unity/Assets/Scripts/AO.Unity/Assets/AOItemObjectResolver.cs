@@ -13,6 +13,7 @@ namespace AO.Unity.Assets
     public static class AOItemObjectResolver
     {
         private const int ItemObjectResourceType = 1000020;
+        private const int NanoProgramResourceType = 1040005;
         private const int QualityLevelStat = 54;
         private const int IconStat = 79;
         private static readonly object Sync = new object();
@@ -21,6 +22,12 @@ namespace AO.Unity.Assets
         private static readonly Dictionary<string, Item> Cache = new Dictionary<string, Item>();
 
         public static bool TryResolve(int lowId, int highId, int quality, out Item item)
+            => TryResolveRecord(lowId, highId, quality, ItemObjectResourceType, out item);
+
+        public static bool TryResolveNano(int nanoId, out Item item)
+            => TryResolveRecord(nanoId, nanoId, 0, NanoProgramResourceType, out item);
+
+        private static bool TryResolveRecord(int lowId, int highId, int quality, int resourceType, out Item item)
         {
             item = null;
             int canonicalId = highId > 0 ? highId : lowId;
@@ -34,11 +41,11 @@ namespace AO.Unity.Assets
             lock (Sync)
             {
                 EnsureDatabase(install);
-                string cacheKey = lowId + ":" + highId + ":" + quality;
+                string cacheKey = resourceType + ":" + lowId + ":" + highId + ":" + quality;
                 if (Cache.TryGetValue(cacheKey, out item))
                     return true;
-                ItemObject low = Read(lowId > 0 ? lowId : canonicalId);
-                ItemObject high = highId > 0 && highId != lowId ? Read(highId) : low;
+                ItemObject low = Read(lowId > 0 ? lowId : canonicalId, resourceType);
+                ItemObject high = highId > 0 && highId != lowId ? Read(highId, resourceType) : low;
                 if (low == null && high == null)
                     return false;
                 low ??= high;
@@ -65,9 +72,16 @@ namespace AO.Unity.Assets
                 if (iconId > 0)
                     stats[IconStat] = iconId;
 
+                foreach (int meshStat in new[] { 12, 209 })
+                {
+                    int meshId = ReadStat(low, meshStat, 0);
+                    if (meshId <= 0) meshId = ReadStat(high, meshStat, 0);
+                    if (meshId > 0) stats[meshStat] = meshId;
+                }
+
                 item = new Item
                 {
-                    DBType = ItemObjectResourceType,
+                    DBType = resourceType,
                     AOID = canonicalId,
                     Name = !string.IsNullOrWhiteSpace(low.Name) ? low.Name : high.Name,
                     Description = !string.IsNullOrWhiteSpace(low.Description)
@@ -77,9 +91,16 @@ namespace AO.Unity.Assets
                 };
                 foreach (KeyValuePair<int, int> stat in stats)
                     item.StatValues.Add(new RawStatValue { Stat = stat.Key, RawValue = stat.Value });
+                item.AttackDefenseData = new ItemAttackDefenseData();
+                foreach (var skill in low.AttackSkills)
+                    item.AttackDefenseData.Attack.Add(new RawStatValue { Stat = (int)skill.Key, RawValue = unchecked((int)skill.Value) });
+                foreach (var skill in low.DefenseSkills)
+                    item.AttackDefenseData.Defense.Add(new RawStatValue { Stat = (int)skill.Key, RawValue = unchecked((int)skill.Value) });
+                if (resourceType == NanoProgramResourceType) CopyNanoEffects(low, item);
                 CopyUploadNano(low, item);
                 if (item.SpellData.Count == 0 && !ReferenceEquals(high, low))
                     CopyUploadNano(high, item);
+                CopyWearCapacity(low, high, factor, item);
                 CopyWearVisuals(low, item);
                 if (!ReferenceEquals(high, low))
                     CopyWearVisuals(high, item);
@@ -99,9 +120,9 @@ namespace AO.Unity.Assets
             Cache.Clear();
         }
 
-        private static ItemObject Read(int id)
+        private static ItemObject Read(int id, int resourceType)
         {
-            if (id <= 0 || !_database.TryReadRaw(ItemObjectResourceType, id, out byte[] raw)
+            if (id <= 0 || !_database.TryReadRaw(resourceType, id, out byte[] raw)
                 || raw == null || raw.Length == 0)
                 return null;
             var result = new ItemObject();
@@ -137,6 +158,40 @@ namespace AO.Unity.Assets
                     value = (int)Math.Round(lowValue + (value - (double)lowValue) * factor);
                 destination[stat] = value;
             }
+        }
+
+        private static int ReadOperation(IDictionary operations, FunctionOperator key)
+            => operations.Contains(key) ? Convert.ToInt32(operations[key]) : 0;
+
+        private static void CopyNanoEffects(ItemObject source, Item destination)
+        {
+            if (source?.OnUse == null) return;
+            var field = source.OnUse.GetType().BaseType?.GetField("_modifiers",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (!(field?.GetValue(source.OnUse) is IDictionary modifiers)) return;
+            var group = new ItemSpellGroup { Event = 0 };
+            foreach (DictionaryEntry entry in modifiers)
+            {
+                if (!(entry.Key is FunctionType function) || !(entry.Value is IEnumerable list)) continue;
+                foreach (object value in list)
+                {
+                    if (!(value is IDictionary operations)) continue;
+                    int amount = ReadOperation(operations, FunctionOperator.Value);
+                    var spell = new ItemSpellData
+                    {
+                        SpellID = (int)function, Target = ReadOperation(operations, FunctionOperator.ApplyOn),
+                        Stat = ReadOperation(operations, FunctionOperator.Stat), Amount = amount,
+                        MinValue = ReadOperation(operations, FunctionOperator.Min),
+                        MaxValue = ReadOperation(operations, FunctionOperator.Max),
+                        TickCount = ReadOperation(operations, FunctionOperator.Duration),
+                        TickInterval = ReadOperation(operations, FunctionOperator.Interval),
+                        NanoID = function == FunctionType.CastNano ? amount : 0,
+                        SpellDescription = function.ToString()
+                    };
+                    group.Items.Add(spell);
+                }
+            }
+            if (group.Items.Count > 0) destination.SpellData.Add(group);
         }
 
         private static void CopyUploadNano(ItemObject source, Item destination)
@@ -184,6 +239,47 @@ namespace AO.Unity.Assets
                     return;
                 }
             }
+        }
+
+        private static void CopyWearCapacity(ItemObject low, ItemObject high, float factor, Item destination)
+        {
+            // These bonuses are OnWear functions, not raw item attributes.
+            foreach (int statId in new[] { 45, 181 }) // belt slots, maximum NCU
+            {
+                int lowValue = ReadWearCapacity(low, statId);
+                int highValue = ReadWearCapacity(high, statId);
+                int amount = (int)Math.Round(lowValue + (highValue - (double)lowValue) * factor);
+                if (amount == 0) continue;
+                destination.SpellData.Add(new ItemSpellGroup
+                {
+                    Event = 14,
+                    Items = new List<ItemSpellData> { new ItemSpellData
+                    {
+                        Target = 2, Stat = statId, Amount = amount,
+                        SpellID = (int)FunctionType.ModifyStat
+                    } }
+                });
+            }
+        }
+
+        private static int ReadWearCapacity(ItemObject source, int statId)
+        {
+            if (source?.OnWear == null) return 0;
+            var field = source.OnWear.GetType().BaseType?.GetField("_modifiers",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (!(field?.GetValue(source.OnWear) is IDictionary modifiers)
+                || !(modifiers[FunctionType.ModifyStat] is IEnumerable operationsList)) return 0;
+            int total = 0;
+            foreach (object entry in operationsList)
+            {
+                if (!(entry is IDictionary operations) || !operations.Contains(FunctionOperator.Stat)
+                    || !operations.Contains(FunctionOperator.Value)
+                    || Convert.ToInt32(operations[FunctionOperator.Stat]) != statId) continue;
+                if (operations.Contains(FunctionOperator.ApplyOn)
+                    && Convert.ToInt32(operations[FunctionOperator.ApplyOn]) != 2) continue;
+                total += Convert.ToInt32(operations[FunctionOperator.Value]);
+            }
+            return total;
         }
 
         private static void CopyWearVisuals(ItemObject source, Item destination)

@@ -67,6 +67,18 @@ namespace AO.Client
 
         InventorySnapshot GetInventorySnapshot();
 
+        InventorySnapshot GetContainerInventorySnapshot(int containerInstance);
+
+        Task UseItemAsync(ItemLocation location, CancellationToken cancellationToken = default);
+
+        Task UseSpecialAttackAsync(int statId, int targetType, int targetInstance, CancellationToken cancellationToken = default);
+
+        Task SetAttackTargetAsync(int targetType, int targetInstance, CancellationToken cancellationToken = default);
+
+        Task CancelNanoAsync(int nanoId, CancellationToken cancellationToken = default);
+
+        Task CastNanoAsync(int nanoId, int targetType, int targetInstance, CancellationToken cancellationToken = default);
+
         CharacterStateSnapshot GetCharacterStateSnapshot();
 
         Task SendPlayerMovementAsync(PlayerMovementUpdate movement,

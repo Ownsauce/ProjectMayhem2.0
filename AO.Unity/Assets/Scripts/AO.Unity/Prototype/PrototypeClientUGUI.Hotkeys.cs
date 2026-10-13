@@ -81,20 +81,20 @@ namespace AO.Unity.Prototype
             if (IsActionPressedInputSystem("copy_to_clipboard", kb)) CopyTargetNameToClipboard();
 
             if (IsActionPressedInputSystem("switch_fight_target", kb)) TryCycleFightTargetHotkey();
-            if (IsActionPressedInputSystem("aimed_shot", kb)) PublishStatusStub("Aimed Shot", "stub");
+            if (IsActionPressedInputSystem("aimed_shot", kb)) TryUseNativeSpecialHotkey(151, "Aimed Shot");
             if (IsActionPressedInputSystem("bow_special_attack", kb)) PublishStatusStub("Bow Special Attack", "stub");
-            if (IsActionPressedInputSystem("brawl", kb)) PublishStatusStub("Brawl", "stub");
+            if (IsActionPressedInputSystem("brawl", kb)) TryUseNativeSpecialHotkey(142, "Brawl");
             if (IsActionPressedInputSystem("burst", kb)) TryUseBurstHotkey();
             if (IsActionPressedInputSystem("create_reference", kb)) PublishStatusStub("Create Reference", "stub");
-            if (IsActionPressedInputSystem("dimach", kb)) PublishStatusStub("Dimach", "stub");
-            if (IsActionPressedInputSystem("fast_attack", kb)) PublishStatusStub("Fast Attack", "stub");
+            if (IsActionPressedInputSystem("dimach", kb)) TryUseNativeSpecialHotkey(144, "Dimach");
+            if (IsActionPressedInputSystem("fast_attack", kb)) TryUseNativeSpecialHotkey(147, "Fast Attack");
             if (IsActionPressedInputSystem("fling_shot", kb)) TryUseFlingShotHotkey();
-            if (IsActionPressedInputSystem("full_auto", kb)) PublishStatusStub("Full Auto", "stub");
+            if (IsActionPressedInputSystem("full_auto", kb)) TryUseNativeSpecialHotkey(167, "Full Auto");
             if (IsActionPressedInputSystem("look_at", kb)) ToggleLookAtWindow();
             if (IsActionPressedInputSystem("pickup_item", kb)) PublishStatusStub("Pickup Item", "stub");
             if (IsActionPressedInputSystem("reload", kb)) PublishStatusStub("Reload", "stub");
             if (IsActionPressedInputSystem("sneak", kb)) PublishStatusStub("Sneak", "stub");
-            if (IsActionPressedInputSystem("sneak_attack", kb)) PublishStatusStub("Sneak Attack", "stub");
+            if (IsActionPressedInputSystem("sneak_attack", kb)) TryUseNativeSpecialHotkey(146, "Sneak Attack");
             if (IsActionPressedInputSystem("use", kb)) PublishStatusStub("Use", "stub");
 
             if (IsActionPressedInputSystem("auto_run", kb)) PublishStatusStub("Auto Run", "stub");
@@ -163,20 +163,20 @@ namespace AO.Unity.Prototype
             if (IsActionPressedLegacy("copy_to_clipboard")) CopyTargetNameToClipboard();
 
             if (IsActionPressedLegacy("switch_fight_target")) TryCycleFightTargetHotkey();
-            if (IsActionPressedLegacy("aimed_shot")) PublishStatusStub("Aimed Shot", "stub");
+            if (IsActionPressedLegacy("aimed_shot")) TryUseNativeSpecialHotkey(151, "Aimed Shot");
             if (IsActionPressedLegacy("bow_special_attack")) PublishStatusStub("Bow Special Attack", "stub");
-            if (IsActionPressedLegacy("brawl")) PublishStatusStub("Brawl", "stub");
+            if (IsActionPressedLegacy("brawl")) TryUseNativeSpecialHotkey(142, "Brawl");
             if (IsActionPressedLegacy("burst")) TryUseBurstHotkey();
             if (IsActionPressedLegacy("create_reference")) PublishStatusStub("Create Reference", "stub");
-            if (IsActionPressedLegacy("dimach")) PublishStatusStub("Dimach", "stub");
-            if (IsActionPressedLegacy("fast_attack")) PublishStatusStub("Fast Attack", "stub");
+            if (IsActionPressedLegacy("dimach")) TryUseNativeSpecialHotkey(144, "Dimach");
+            if (IsActionPressedLegacy("fast_attack")) TryUseNativeSpecialHotkey(147, "Fast Attack");
             if (IsActionPressedLegacy("fling_shot")) TryUseFlingShotHotkey();
-            if (IsActionPressedLegacy("full_auto")) PublishStatusStub("Full Auto", "stub");
+            if (IsActionPressedLegacy("full_auto")) TryUseNativeSpecialHotkey(167, "Full Auto");
             if (IsActionPressedLegacy("look_at")) ToggleLookAtWindow();
             if (IsActionPressedLegacy("pickup_item")) PublishStatusStub("Pickup Item", "stub");
             if (IsActionPressedLegacy("reload")) PublishStatusStub("Reload", "stub");
             if (IsActionPressedLegacy("sneak")) PublishStatusStub("Sneak", "stub");
-            if (IsActionPressedLegacy("sneak_attack")) PublishStatusStub("Sneak Attack", "stub");
+            if (IsActionPressedLegacy("sneak_attack")) TryUseNativeSpecialHotkey(146, "Sneak Attack");
             if (IsActionPressedLegacy("use")) PublishStatusStub("Use", "stub");
 
             if (IsActionPressedLegacy("auto_run")) PublishStatusStub("Auto Run", "stub");
@@ -551,12 +551,18 @@ namespace AO.Unity.Prototype
             _context?.PublishStatus($"{label} ({suffix}).");
         }
 
+        private void TryUseNativeSpecialHotkey(int statId, string name)
+        {
+            if (_context?.IsNativeGameplay == true) _context.TryUseNativeSpecial(statId);
+            else PublishStatusStub(name, "unavailable on this connection");
+        }
+
         private void TryUseBurstHotkey()
         {
             if (_context == null)
                 return;
 
-            if (_context.TryUseBurstSpecial(out _))
+            if (_context.TryUseBurstSpecial(out _) && !_context.IsNativeGameplay)
                 TryPlaySpecialAttackAnimation(isBurst: true);
         }
 
@@ -565,7 +571,7 @@ namespace AO.Unity.Prototype
             if (_context == null)
                 return;
 
-            if (_context.TryUseFlingShotSpecial(out _))
+            if (_context.TryUseFlingShotSpecial(out _) && !_context.IsNativeGameplay)
                 TryPlaySpecialAttackAnimation(isBurst: false);
         }
 

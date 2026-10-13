@@ -202,6 +202,11 @@ namespace AO.Unity.Prototype
         private RectTransform _quickInfoBarRoot;
         private Text _creditsText;
         private Text _ncuSummaryText;
+        private RectTransform _nativeSpecialsRoot;
+        private Font _nativeSpecialsFont;
+        private string _nativeSpecialsSignature;
+        private readonly Dictionary<int, Button> _nativeSpecialButtons = new();
+        private readonly Dictionary<int, Text> _nativeSpecialLabels = new();
         private ActiveNanoCast _activeNanoCast;
         private RectTransform _characterSelectionRoot;
         private CharacterSelectionWindowView _characterSelectionView;
@@ -703,10 +708,57 @@ namespace AO.Unity.Prototype
             layout.childControlHeight = true;
             layout.childForceExpandHeight = true;
 
-            _ncuSummaryText = AOStyleUiFactory.CreateText("NcuSummaryText", _quickInfoBarRoot, "NCU: 0/1", font, 12, TextAnchor.MiddleLeft);
+            _ncuSummaryText = AOStyleUiFactory.CreateText("NcuSummaryText", _quickInfoBarRoot, "NCU: 0/8", font, 12, TextAnchor.MiddleLeft);
             _ncuSummaryText.color = new Color(0.8f, 0.94f, 1f, 1f);
             _creditsText = AOStyleUiFactory.CreateText("CreditsText", _quickInfoBarRoot, "Credits: 0", font, 12, TextAnchor.MiddleLeft);
             _creditsText.color = new Color(0.97f, 0.92f, 0.68f, 1f);
+            _nativeSpecialsFont = font;
+            _nativeSpecialsRoot = AOStyleUiFactory.CreatePanel("SpecialAttacks", _quickInfoBarRoot, AOStyleUiFactory.Surface);
+            _nativeSpecialsRoot.anchorMin = Vector2.zero;
+            _nativeSpecialsRoot.anchorMax = Vector2.zero;
+            _nativeSpecialsRoot.pivot = Vector2.zero;
+            _nativeSpecialsRoot.anchoredPosition = new Vector2(0f, 32f);
+            _nativeSpecialsRoot.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+            var specialsGrid = _nativeSpecialsRoot.gameObject.AddComponent<GridLayoutGroup>();
+            specialsGrid.cellSize = new Vector2(112f, 36f);
+            specialsGrid.spacing = new Vector2(4f, 4f);
+            specialsGrid.padding = new RectOffset(4, 4, 4, 4);
+            specialsGrid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            _nativeSpecialsRoot.gameObject.SetActive(false);
+        }
+
+        private void UpdateNativeSpecialsHud()
+        {
+            if (_nativeSpecialsRoot == null) return;
+            var specials = _context.GetNativeWeaponSpecials();
+            _nativeSpecialsRoot.gameObject.SetActive(specials.Count > 0);
+            if (specials.Count == 0) return;
+            int columns = Mathf.Clamp(Mathf.FloorToInt((Screen.width - 16f) / 116f), 1, Mathf.Min(6, specials.Count));
+            string signature = columns + ":" + string.Join(",", specials);
+            if (_nativeSpecialsSignature != signature)
+            {
+                _nativeSpecialsSignature = signature;
+                AOStyleUiFactoryCleanup.Clear(_nativeSpecialsRoot);
+                _nativeSpecialButtons.Clear(); _nativeSpecialLabels.Clear();
+                _nativeSpecialsRoot.GetComponent<GridLayoutGroup>().constraintCount = columns;
+                _nativeSpecialsRoot.sizeDelta = new Vector2(columns * 116f + 4f, Mathf.CeilToInt(specials.Count / (float)columns) * 40f + 4f);
+                foreach (int statId in specials)
+                {
+                    int selectedStat = statId;
+                    var button = AOStyleUiFactory.CreateButton("Special_" + statId, _nativeSpecialsRoot,
+                        PrototypeUiContext.GetSpecialName(statId), _nativeSpecialsFont,
+                        () => _context.TryUseNativeSpecial(selectedStat), 112f);
+                    var label = button.GetComponentInChildren<Text>(); label.fontSize = 11;
+                    _nativeSpecialButtons[statId] = button; _nativeSpecialLabels[statId] = label;
+                }
+            }
+            foreach (int statId in specials)
+            {
+                float remaining = _context.GetNativeSpecialRemaining(statId);
+                _nativeSpecialLabels[statId].text = PrototypeUiContext.GetSpecialName(statId)
+                    + (remaining > 0f ? $"\n{Mathf.CeilToInt(remaining)}s" : "\nReady");
+                _nativeSpecialButtons[statId].interactable = remaining <= 0f;
+            }
         }
 
         private void UpdateQuickInfoBar()
@@ -714,6 +766,7 @@ namespace AO.Unity.Prototype
             if (_context == null)
                 return;
 
+            UpdateNativeSpecialsHud();
             if (_creditsText != null)
                 _creditsText.text = $"Credits: {_context.GetCurrentCredits():N0}";
 

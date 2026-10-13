@@ -189,12 +189,13 @@ namespace AO.Unity.AOStyle
             }
         }
 
+        private string _renderedPrograms;
+
         private void Refresh()
         {
             if (_context == null || _gridRoot == null || _summaryText == null)
                 return;
 
-            AOStyleUiFactoryCleanup.Clear(_gridRoot);
             var uploaded = _context.GetUploadedPrograms();
             int totalCount = uploaded?.Count ?? 0;
             var filtered = new List<PrototypeUiContext.UploadedNanoProgram>();
@@ -216,6 +217,12 @@ namespace AO.Unity.AOStyle
             }
 
             _summaryText.text = $"Programs: {filtered.Count}/{totalCount}   Target: {ResolveTargetName()}";
+
+            string signature = _activeTab + ":" + _gridLayout.constraintCount;
+            foreach (var program in filtered) signature += $"/{program.NanoId}:{program.IconId}:{program.Name}";
+            if (_renderedPrograms == signature) return;
+            _renderedPrograms = signature;
+            AOStyleUiFactoryCleanup.Clear(_gridRoot);
 
             if (filtered.Count == 0)
             {

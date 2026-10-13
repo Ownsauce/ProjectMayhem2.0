@@ -33,3 +33,34 @@ authenticates against AORebirth Local, prints only returned character metadata,
 and verifies selection through zone compression negotiation. It never prints
 credentials. It then decompresses the initial zone stream and verifies the
 authoritative playfield and position bootstrap.
+
+`AO.Client.WorldDelta.Tests.cs` also checks native item-use wire layout, unsigned
+packed backpack handles, container hydration/reopening, upload acknowledgements,
+truncated/foreign replies, and rejection of empty slots before sending a request.
+The item-use transport test uses only a local loopback socket.
+
+The world delta suite checks native attack/stop layouts, hit/miss decoding,
+truncation handling, health updates from AttackInfo without a stat packet, and
+immediate isolated-packet delivery with cancellation preserving queued replies.
+
+The world delta suite also checks native special requests, special-hit hand/skill
+fields, SpecialUsed/Available cooldowns, truncated and foreign cooldown replies,
+and delivery of cooldowns once.
+
+`AO.Client.GameplayMetadata.Tests.csproj` is an installed-data integration check:
+
+```sh
+dotnet run --project tests/AO.Client.GameplayMetadata.Tests.csproj -- '/path/to/Anarchy Online'
+```
+
+It uses the production metadata/icon readers to verify nano identity, PNG icon
+payloads, NCU cost, tooltip effects, equipped capacity bonuses and weapon attack
+skills. It also checks the combat animation tokens against the installed catalog.
+It does not connect to a server or require Unity. `PROJECTMAYHEM_AO_INSTALL` can
+supply the installation path instead of the argument.
+
+World delta regression cases cover unequip/equip acknowledgements followed by
+stats in the same batch, preserved equipment revisions, personal buffs with an
+NPC selected, friendly player targets, hostile nano targeting, and native NCU
+cancellation wire layout/transport. Installed-data tests verify Composite Utility
+Expertise's four-NCU cost and targeting flags.

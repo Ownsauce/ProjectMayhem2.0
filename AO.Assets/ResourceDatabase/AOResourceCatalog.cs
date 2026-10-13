@@ -5,6 +5,41 @@ using System.Text;
 
 namespace AO.Assets.ResourceDatabase
 {
+    public static class AOCombatAnimationCatalog
+    {
+        public static int GetWeaponSet(int skill, bool dualCapable)
+        {
+            if (skill == 0 || skill == 100) return 2;
+            if (skill == 105 || skill == 107) return 5;
+            if (skill >= 102 && skill <= 106) return 1;
+            if (skill == 112 || (dualCapable && (skill == 114 || skill == 115 || skill == 133))) return 4;
+            return 3;
+        }
+
+        public static string[] GetTokens(string action, int set)
+        {
+            string stance = set == 1 ? "blade" : set == 2 ? "unarmed" : set == 4 ? "smallarms" : set == 5 ? "2h" : "rifle";
+            bool left = action.EndsWith("-left", StringComparison.Ordinal);
+            if (action == "attack-idle") return new[] { "idle-" + stance + "_" };
+            if (action == "attack-start") return new[] { stance + "-start_" };
+            if (action == "attack-stop") return new[] { stance + "-stop_" };
+            if (action == "special-brawl") return new[] { "unarmed-rswing_", "unarmed-twopunch_" };
+            if (action == "special-dimach") return new[] { "unarmed-twopunch_", "unarmed-uppercut_" };
+            if (action.StartsWith("special-burst", StringComparison.Ordinal) && (set == 3 || set == 4))
+                return new[] { stance + (left && set == 4 ? "-burstl_" : "-burst_") };
+            if (action.StartsWith("special-fullauto", StringComparison.Ordinal) && (set == 3 || set == 4))
+                return new[] { stance + (left && set == 4 ? "-autol_" : "-auto_") };
+            if (action.StartsWith("attack-hit", StringComparison.Ordinal) || action.StartsWith("special-", StringComparison.Ordinal))
+            {
+                if (set == 1) return new[] { left ? "blade1hl-slash_" : "blade1h-slash_", "blade1h-stab_" };
+                if (set == 5) return new[] { "blade2h-slash_", "blade2h-stab_" };
+                if (set == 2) return new[] { left ? "unarmed-lswing_" : "unarmed-rswing_", "unarmed-twopunch_" };
+                return new[] { stance + (left && set == 4 ? "-shotl_" : "-shot_") };
+            }
+            return Array.Empty<string>();
+        }
+    }
+
     public static class AOResourceTypes
     {
         public const int Playfield = 1000001;

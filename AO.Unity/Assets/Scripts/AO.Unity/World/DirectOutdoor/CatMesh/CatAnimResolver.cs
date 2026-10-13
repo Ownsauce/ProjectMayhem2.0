@@ -53,7 +53,11 @@ public sealed class CatAnimResolver
 
         if (!MonsterDataResolver.TryGetAnimIds(_database, monsterDataId, animSet, out List<int> candidates)
             && !MonsterDataResolver.TryGetProfileAnimIds(_database, _animationProfile, out candidates))
-            return false;
+        {
+            if (!action.StartsWith("attack-", StringComparison.Ordinal)
+                && !action.StartsWith("special-", StringComparison.Ordinal)) return false;
+            candidates = new List<int>();
+        }
 
         EnsureAnimNames();
 
@@ -63,7 +67,8 @@ public sealed class CatAnimResolver
 
         if (TryResolveSitSemantic(action, candidates, preferredVariant, out animId, out resolvedName)
             || TryResolveJumpSemantic(action, candidates, preferredVariant, out animId, out resolvedName)
-            || TryResolveNanoSemantic(action, candidates, out animId, out resolvedName))
+            || TryResolveNanoSemantic(action, candidates, out animId, out resolvedName)
+            || TryResolveCombatSemantic(action, animSet, candidates, out animId, out resolvedName))
         {
             lock (ResolveCacheGate)
                 ResolveCache[cacheKey] = animId;
@@ -258,6 +263,8 @@ public sealed class CatAnimResolver
             return "nano-cast-loop";
         if (trimmed.Contains("spell-self") || trimmed.Contains("spell_self"))
             return "nano-cast-start";
+        if (trimmed.StartsWith("attack-", StringComparison.Ordinal)
+            || trimmed.StartsWith("special-", StringComparison.Ordinal)) return trimmed;
         return trimmed switch
         {
             "idle" => "idle",
@@ -277,6 +284,21 @@ public sealed class CatAnimResolver
             "jump-land-run" => "jump-land-run",
             _ => null,
         };
+    }
+
+    bool TryResolveCombatSemantic(string action, int set, List<int> candidates, out int animId, out string resolvedName)
+    {
+        animId = 0; resolvedName = null;
+        string[] tokens = AO.Assets.ResourceDatabase.AOCombatAnimationCatalog.GetTokens(action, set);
+        if (tokens.Length == 0) return false;
+        string profile = string.IsNullOrWhiteSpace(_animationProfile) ? "male" : _animationProfile;
+        foreach (string token in tokens)
+        {
+            if (TryFindNanoAnimation(candidates, profile, token, out animId, out resolvedName)) return true;
+            // Player MonsterData can omit weapon stances; use its breed/sex clips from the catalog.
+            if (TryFindNanoAnimation(new List<int>(_animNames.Keys), profile, token, out animId, out resolvedName)) return true;
+        }
+        return false;
     }
 
     bool TryResolveNanoSemantic(

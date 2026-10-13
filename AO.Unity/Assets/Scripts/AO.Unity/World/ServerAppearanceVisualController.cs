@@ -12,6 +12,22 @@ namespace AO.Unity.World
     [DefaultExecutionOrder(1000)]
     public sealed class ServerAppearanceVisualController : MonoBehaviour
     {
+        private sealed class SharedResources
+        {
+            public ResourceDatabase Database;
+            public AoImageTextureCache Images;
+            public AbiffMaterialFactory Materials;
+            public AbiffLoader Loader;
+            public Dictionary<string, int> SkinIds;
+            public int Users;
+        }
+        private static readonly Dictionary<string, SharedResources> ResourcePools = new(StringComparer.OrdinalIgnoreCase);
+        private SharedResources _resources;
+        private string _resourcePath;
+        private string _desiredSignature;
+        private string _appliedBodySignature;
+        private readonly Dictionary<string, GameObject> _attachmentsByKey = new();
+        private readonly List<Material> _attachmentMaterials = new();
         private NearbyEntity _entity;
         private Transform _visual;
         private Transform _appliedVisual;
@@ -52,7 +68,10 @@ namespace AO.Unity.World
             if (entity?.EquipmentAppearance == null) return;
             if (_entity == null || entity.Appearance != _entity.Appearance
                 || !ReferenceEquals(entity.EquipmentAppearance, _entity.EquipmentAppearance))
+            {
                 _retryAt = 0f;
+                _desiredSignature = Signature(entity);
+            }
             _entity = entity;
         }
 
@@ -63,6 +82,8 @@ namespace AO.Unity.World
             _entity = null;
             ReleaseVisuals();
             _appliedSignature = null;
+            _desiredSignature = null;
+            _appliedBodySignature = null;
             _appliedVisual = null;
             _retryAt = 0f;
         }
@@ -72,14 +93,27 @@ namespace AO.Unity.World
             if (!HasAppearance) return;
             var local = GetComponent<CharacterAppearanceController>();
             Transform visual = local != null ? local.BodyVisualRoot : _visual;
-            if (visual == null || Time.unscaledTime < _retryAt) return;
-            string signature = Signature(_entity);
+            // Do not bind against the previous body while an asynchronous CAT load is in flight.
+            if (visual == null || (local != null && !local.IsCurrentBodyVisualReady) || Time.unscaledTime < _retryAt) return;
+            string signature = _desiredSignature;
             if (visual == _appliedVisual && signature == _appliedSignature) return;
             try
             {
                 if (!EnsureResources()) { _retryAt = Time.unscaledTime + 1f; return; }
-                ReleaseVisuals();
-                bool complete = ApplyBody(visual);
+                if (visual != _appliedVisual) { ReleaseVisuals(); _appliedBodySignature = null; }
+                string bodySignature = BodySignature(_entity);
+                bool complete = true;
+                if (_appliedBodySignature != bodySignature)
+                {
+                    ReleaseBody();
+                    complete = ApplyBody(visual);
+                    _appliedBodySignature = complete ? bodySignature : null;
+                }
+                var wanted = new HashSet<string>();
+                foreach (var mesh in _entity.EquipmentAppearance.VisibleMeshes()) wanted.Add(MeshKey(mesh));
+                var obsolete = new List<string>();
+                foreach (var pair in _attachmentsByKey) if (!wanted.Contains(pair.Key)) obsolete.Add(pair.Key);
+                foreach (string key in obsolete) { ReleaseAttachment(_attachmentsByKey[key]); _attachmentsByKey.Remove(key); }
                 int attached = 0;
                 int missingSockets = 0;
                 int failedMeshes = 0;
@@ -89,9 +123,23 @@ namespace AO.Unity.World
                     if (socket == null)
                     {
                         missingSockets++;
+                        if (_entity.Kind == NearbyEntityKind.Player) complete = false;
                         Debug.LogWarning($"[AO Appearance] {_entity.IdentityInstance}: no socket for "
                             + $"position {mesh.Position} ({PlaceName(mesh.Position)}), mesh {mesh.MeshId}.");
                         continue; // Non-humanoid bodies need not have every socket.
+                    }
+                    string key = MeshKey(mesh);
+                    if (_attachmentsByKey.TryGetValue(key, out var retained) && retained != null)
+                    {
+                        if (retained.transform.parent != socket)
+                        {
+                            retained.transform.SetParent(socket, false);
+                            retained.transform.localPosition = Vector3.zero;
+                            retained.transform.localRotation = Quaternion.identity;
+                            retained.transform.localScale = Vector3.one;
+                        }
+                        attached++;
+                        continue;
                     }
                     if (mesh.MeshId > int.MaxValue || !_loader.TryCreateVisual((int)mesh.MeshId,
                         socket, mesh.OverrideTextureId, out GameObject root))
@@ -104,11 +152,12 @@ namespace AO.Unity.World
                     }
                     root.name = $"ServerEquip_{mesh.Position}_{mesh.MeshId}_{mesh.Layer}";
                     _attachments.Add(root);
+                    _attachmentsByKey[key] = root;
                     foreach (var filter in root.GetComponentsInChildren<MeshFilter>(true))
                         if (filter.sharedMesh != null) _ownedMeshes.Add(filter.sharedMesh);
                     if (mesh.OverrideTextureId > 0)
                         foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
-                            _ownedMaterials.AddRange(renderer.sharedMaterials);
+                            _attachmentMaterials.AddRange(renderer.sharedMaterials);
                     attached++;
                 }
                 _appliedVisual = visual;
@@ -134,18 +183,29 @@ namespace AO.Unity.World
             if (_database != null) return true;
             var install = AOInstallConfiguration.GetConfiguredInstall();
             if (install == null || !install.IsValid) return false;
-            var database = new ResourceDatabase();
-            try { database.Initialize(install.RootPath); }
-            catch { database.Dispose(); throw; }
-            _database = database;
-            _images = new AoImageTextureCache(database);
-            _materials = new AbiffMaterialFactory(database);
-            _loader = new AbiffLoader(database, _materials, _images);
-            _skinIds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var info = database.Get<InfoObject>(1);
-            if (info?.Types != null && info.Types.TryGetValue(ResourceTypeId.SkinTexture, out var names))
-                foreach (var pair in names)
-                    if (!string.IsNullOrWhiteSpace(pair.Value)) _skinIds[pair.Value.Trim().Trim('\0')] = pair.Key;
+            _resourcePath = System.IO.Path.GetFullPath(install.RootPath);
+            if (!ResourcePools.TryGetValue(_resourcePath, out _resources))
+            {
+                var database = new ResourceDatabase();
+                try { database.Initialize(install.RootPath); }
+                catch { database.Dispose(); throw; }
+                var images = new AoImageTextureCache(database);
+                var materials = new AbiffMaterialFactory(database);
+                var skins = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                var info = database.Get<InfoObject>(1);
+                if (info?.Types != null && info.Types.TryGetValue(ResourceTypeId.SkinTexture, out var names))
+                    foreach (var pair in names)
+                        if (!string.IsNullOrWhiteSpace(pair.Value)) skins[pair.Value.Trim().Trim('\0')] = pair.Key;
+                _resources = new SharedResources { Database = database, Images = images, Materials = materials,
+                    Loader = new AbiffLoader(database, materials, images), SkinIds = skins };
+                ResourcePools[_resourcePath] = _resources;
+            }
+            _resources.Users++;
+            _database = _resources.Database;
+            _images = _resources.Images;
+            _materials = _resources.Materials;
+            _loader = _resources.Loader;
+            _skinIds = _resources.SkinIds;
             return true;
         }
 
@@ -292,6 +352,16 @@ namespace AO.Unity.World
             return null;
         }
 
+        private static string MeshKey(AppearanceMesh mesh)
+            => $"{mesh.Position}:{mesh.MeshId}:{mesh.OverrideTextureId}:{mesh.Layer}";
+
+        private static string BodySignature(NearbyEntity entity)
+        {
+            var result = new StringBuilder().Append(entity.Appearance);
+            foreach (var t in entity.EquipmentAppearance.Textures) result.Append('|').Append(t.Position).Append(':').Append(t.TextureId);
+            return result.ToString();
+        }
+
         private static string Signature(NearbyEntity entity)
         {
             var result = new StringBuilder().Append(entity.Appearance).Append(':')
@@ -303,23 +373,50 @@ namespace AO.Unity.World
             return result.ToString();
         }
 
-        private void ReleaseVisuals()
+        private void ReleaseAttachment(GameObject root)
+        {
+            _attachments.Remove(root);
+            if (root == null) return;
+            root.SetActive(false);
+            foreach (var filter in root.GetComponentsInChildren<MeshFilter>(true))
+                if (filter.sharedMesh != null && _ownedMeshes.Remove(filter.sharedMesh)) Destroy(filter.sharedMesh);
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>(true))
+                foreach (var material in renderer.sharedMaterials)
+                    if (material != null && _attachmentMaterials.Remove(material)) Destroy(material);
+            Destroy(root);
+        }
+
+        private void ReleaseBody()
         {
             foreach (var pair in _originalMaterials) if (pair.Key != null) pair.Key.sharedMaterials = pair.Value;
             _originalMaterials.Clear();
-            foreach (var root in _attachments) if (root != null) { root.SetActive(false); Destroy(root); }
-            _attachments.Clear();
-            foreach (var mesh in _ownedMeshes) if (mesh != null) Destroy(mesh);
-            _ownedMeshes.Clear();
             foreach (var material in _ownedMaterials) if (material != null) Destroy(material);
             _ownedMaterials.Clear();
             foreach (var texture in _bakes.Values) if (texture != null) Destroy(texture);
             _bakes.Clear();
-            // Caches live only as long as this actor's current outfit; no unbounded crowd cache.
-            _images?.Clear();
-            _materials?.Clear();
         }
 
-        private void OnDestroy() { ReleaseVisuals(); _database?.Dispose(); }
+        private void ReleaseVisuals()
+        {
+            ReleaseBody();
+            foreach (var root in _attachments.ToArray()) ReleaseAttachment(root);
+            _attachments.Clear();
+            _attachmentsByKey.Clear();
+            _ownedMeshes.Clear();
+            _attachmentMaterials.Clear();
+        }
+
+        private void OnDestroy()
+        {
+            ReleaseVisuals();
+            if (_resources != null && --_resources.Users == 0)
+            {
+                _resources.Images.Clear();
+                _resources.Materials.Clear();
+                _resources.Database.Dispose();
+                ResourcePools.Remove(_resourcePath);
+            }
+            _resources = null;
+        }
     }
 }

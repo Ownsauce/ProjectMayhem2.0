@@ -66,3 +66,56 @@ and received packet counts, and the UTC time of the last complete received packe
 Counts reset for a new connection and include authentication and zone traffic.
 The AORebirth adapter currently does not expose a server tick; UI diagnostics show
 that value as unavailable rather than reuse the legacy JSON client tick.
+
+Native item use sends GenericCmd Use for carried/worn slots or a packed backpack
+handle/slot address. Rechargers, stims, nano crystals, and backpack opening use
+this path. Effects and consumption remain server-owned. UploadNano replies update
+the acknowledged program list, and container inventory updates are delivered
+separately from the main inventory. Known backpack open replies republish cached
+contents. Backpack handles are cleared when the world/session changes. Container
+item moves still require a separate transfer implementation.
+
+Item use now correlates GenericCmd acknowledgements and reports rejections/timeouts.
+Nano casting sends CharacterAction CastNano; SetNanoDuration and Buff removal
+messages drive active NCU effects. Unity counts their NCU costs (excluding hostile
+and no-NCU effects) and floors capacity at eight. Server MaxNCU is treated as a
+total; interpolated OnWear belt/memory bonuses provide a fallback without being
+added to that total again.
+Unity synchronizes sit/stand movement states before using recharge items.
+
+Native Q combat sends Attack/StopFight. Attack and StopFight replies reconcile
+animation state; AttackInfo/MissedAttackInfo provide damage and miss events.
+Weapon hits update nearby and controlled health immediately, without waiting
+for a separate stat packet. The client does not calculate native weapon damage.
+
+World updates wait for the first packet, then drain only packets already queued
+within a four-millisecond processing budget. There is no trailing aggregation
+wait, and login/zone sockets use TCP_NODELAY. Server item EquipDelay remains in
+effect (the installed starter pistol is 100 centiseconds, Blackmane's belt 200).
+The reference copy's Connection.dll exposes Connection_t::Send,
+TcpHandler_t::Send_i/FlushWaitBuffer and ACE receive/send; N3.dll exposes native
+network-message dispatch. Packet fields were checked against the AORebirth
+message contracts. Binary exports alone do not establish original-client latency.
+
+Uploaded nano metadata comes from resource type 1040005, separately from carried
+item records (1000020). NCU usage uses authoritative CurrentNCU and confirmed
+running effects; the template's stat 54 supplies the native NCU cost. Nano OnUse
+functions are decoded for tooltips, without applying their modifiers locally.
+The same icon payload reader handles uploaded and running program icons.
+
+Native specials use CharSecSpecAttack (target and skill ID). SpecialAttackInfo
+and misses retain the special and hand slot; SpecialUsed (0xAA) / SpecialAvailable
+(0xA4) drive cooldowns. Unity exposes equipped specials as clickable buttons with
+countdowns, and routes the ranged/melee special hotkeys through this protocol.
+Direct CAT models select weapon stances and play installed attack/special clips
+from server hits. Per-frame locomotion does not cancel these combat one-shots.
+
+Equipment snapshots carry an equipment revision through subsequent stat/upload/
+combat snapshots. Unity consumes that revision even when the last packet in a
+batch is stats-only, so acknowledged unequips and replacements clear worn icons.
+
+Unflagged personal buffs default to the caster with an NPC selected; selected
+players and explicitly supported friendly NPC/pet targets remain valid recipients. Self-only and hostile nanos retain their respective
+rules. NCU right-click sends RemoveFriendlyNano (0x41) and waits for the server's
+Buff removal before removing the running entry. It no longer clears NCU locally
+while leaving the buff active on the server.

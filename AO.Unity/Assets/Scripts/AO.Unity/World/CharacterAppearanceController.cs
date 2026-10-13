@@ -1557,7 +1557,8 @@ namespace AO.Unity.World
                 targetAttackWeight = 1f;
             }
             bool attackCycleAllowed = attackToggleActive && !_sitToggled && !_sitTransitionPlaying && !jumpBusy;
-            UpdateAttackCombatSequence(attackCycleAllowed, shouldMove);
+            bool nativeCatCombat = directAnim != null && AO.Unity.Prototype.PrototypeUiContext.Active?.IsNativeGameplay == true;
+            if (!nativeCatCombat) UpdateAttackCombatSequence(attackCycleAllowed, shouldMove);
 
             if (directAnim != null)
             {
@@ -1575,6 +1576,18 @@ namespace AO.Unity.World
                         forwardPressed, backwardPressed,
                         strafeLeftPressed, strafeRightPressed));
                     return;
+                }
+
+                if (nativeCatCombat)
+                {
+                    if (_directCombatHitPlaying && directAnim.IsPlayingOneShot) return;
+                    _directCombatHitPlaying = false;
+                    directAnim.SetAnimSet(attackCycleAllowed ? ResolveDirectWeaponSet() : 0);
+                    if (attackCycleAllowed && !shouldMove)
+                    {
+                        directAnim.Play("attack-idle");
+                        return;
+                    }
                 }
 
                 string logical = shouldSitIdle
@@ -3641,7 +3654,7 @@ namespace AO.Unity.World
 
         private static bool IsRangedAttackSkill(int statId)
         {
-            return statId is 109 or 110 or 111 or 112 or 114 or 115 or 116 or 121 or 133;
+            return statId is 109 or 110 or 111 or 112 or 113 or 114 or 115 or 116 or 121 or 133;
         }
 
         private string ResolveRuleClipCandidate(AttackAnimationRule rule, string sexToken)
@@ -3781,7 +3794,7 @@ namespace AO.Unity.World
             if (raw == null)
                 return true;
 
-            int slotBitmap = raw.StatModifiers?.FirstOrDefault(m => m != null && m.StatId == equipSlotBitmapStatId)?.Value ?? 0;
+            int slotBitmap = raw.StatValues?.FirstOrDefault(m => m != null && m.Stat == equipSlotBitmapStatId)?.RawValue ?? 0;
             bool canRight = (slotBitmap & rightHandBit) != 0;
             bool canLeft = (slotBitmap & leftHandBit) != 0;
             if (canRight || canLeft)
@@ -3811,7 +3824,7 @@ namespace AO.Unity.World
             int[] weaponSkillStatIds =
             {
                 102, 103, 104, 105, 106, 107,
-                109, 110, 111, 112, 114, 115, 116, 121, 133
+                109, 110, 111, 112, 113, 114, 115, 116, 121, 133
             };
 
             var top = def.Modifiers
@@ -3842,7 +3855,7 @@ namespace AO.Unity.World
                 int[] weaponSkillStatIds =
                 {
                     102, 103, 104, 105, 106, 107, // 1h/2h melee + piercing + melee energy
-                    109, 110, 111, 112, 114, 115, 116, 121, 133 // bow/heavy/AR/pistol/smg/shotgun/rifle/grenade/RE
+                    109, 110, 111, 112, 113, 114, 115, 116, 121, 133 // bow/heavy/AR/pistol/smg/shotgun/rifle/grenade/RE
                 };
 
                 var topMod = raw.StatModifiers
@@ -4723,6 +4736,43 @@ namespace AO.Unity.World
             return false;
         }
 
+        private bool _directCombatHitPlaying;
+
+        private int ResolveDirectWeaponSet()
+        {
+            TryBuildAttackWeaponProfile(out int skill, out WeaponHandMode mode);
+            return AO.Assets.ResourceDatabase.AOCombatAnimationCatalog.GetWeaponSet(skill, mode == WeaponHandMode.EitherOrBoth);
+        }
+
+        public bool TryPlayServerWeaponHit(int specialStat, int handSlot = 0)
+        {
+            var directAnim = _spawnedPrefabVisual?.GetComponentInChildren<CatAnimPlayer>(true);
+            if (directAnim == null) return TryPlayRecentAttackHitAction(out _);
+            directAnim.SetAnimSet(ResolveDirectWeaponSet());
+            string action = specialStat == 148 ? "special-burst" : specialStat == 167 ? "special-fullauto"
+                : specialStat == 142 ? "special-brawl" : specialStat == 144 ? "special-dimach" : "attack-hit";
+            if (handSlot == 8 && specialStat != 142 && specialStat != 144) action += "-left";
+            bool moving = Mathf.Abs(_localLocomotionForward) > 0.001f || Mathf.Abs(_localLocomotionStrafe) > 0.001f;
+            if (moving) return directAnim.PlayOverlayOnce(action, CatAnimPlayer.DefaultBlendSeconds, null);
+            _directCombatHitPlaying = directAnim.PlayOnce(action, CatAnimPlayer.DefaultBlendSeconds,
+                () => _directCombatHitPlaying = false);
+            return _directCombatHitPlaying;
+        }
+
+        public void SetServerAttackActive(bool active)
+        {
+            if (attackToggleActive == active) return;
+            attackToggleActive = active;
+            if (active) { ApplyAttackAnimationRule(force: true); BeginAttackCombatSequence(); }
+            else
+            {
+                EndAttackCombatSequence();
+                _runtimeAttackClipOverride = string.Empty;
+                _freezeAttackLoopPose = false;
+            }
+            ApplyAnimationOverridesNow();
+        }
+
         public int AttackImpactCounter => _attackRuleHitCounter;
 
         public bool TryPlayDeathOneShot(IReadOnlyList<string> actionKeys, out float duration)
@@ -5084,7 +5134,7 @@ namespace AO.Unity.World
 
         private void UpdateTemporaryEquippedItemVisual()
         {
-            if (!enableTemporaryItemVisuals || bridge?.Character == null)
+            if (HasServerAppearance || !enableTemporaryItemVisuals || bridge?.Character == null)
             {
                 ClearTemporaryItemVisual();
                 return;

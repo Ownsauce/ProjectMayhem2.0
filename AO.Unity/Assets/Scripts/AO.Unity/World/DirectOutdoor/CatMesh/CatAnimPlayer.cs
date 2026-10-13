@@ -223,6 +223,7 @@ public sealed class CatAnimPlayer : MonoBehaviour
         ClearOverlay(invokeComplete: false);
     }
 
+    public bool IsPlayingOneShot => _isOneShot;
     public bool HasOverlay => _overlayClip != null && _overlayWeight > 0.001f;
     public float OverlayDuration => _overlayClip != null
         ? Mathf.Max(_overlayClip.GetOneShotDuration(), 0.001f)
