@@ -101,7 +101,8 @@ namespace AO.Client.World
             IReadOnlyList<CombatUpdate> combatUpdates = null,
             IReadOnlyList<SpecialCooldownUpdate> specialCooldowns = null,
             IReadOnlyList<NanoCastUpdate> nanoCasts = null,
-            IReadOnlyList<NanoEffectUpdate> nanoEffectSnapshot = null)
+            IReadOnlyList<NanoEffectUpdate> nanoEffectSnapshot = null,
+            ShopSnapshot shop = null)
         {
             Deltas = deltas ?? throw new ArgumentNullException(nameof(deltas));
             Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
@@ -121,9 +122,11 @@ namespace AO.Client.World
             SpecialCooldowns = specialCooldowns ?? Array.Empty<SpecialCooldownUpdate>();
             NanoCasts = nanoCasts ?? Array.Empty<NanoCastUpdate>();
             NanoEffectSnapshot = nanoEffectSnapshot;
+            Shop = shop;
         }
 
         public IReadOnlyList<SpecialCooldownUpdate> SpecialCooldowns { get; }
+        public ShopSnapshot Shop { get; }
         public IReadOnlyList<NanoCastUpdate> NanoCasts { get; }
         public IReadOnlyList<NanoEffectUpdate> NanoEffectSnapshot { get; }
         public IReadOnlyList<CombatUpdate> CombatUpdates { get; }

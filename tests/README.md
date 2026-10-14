@@ -47,6 +47,23 @@ The world delta suite also checks native special requests, special-hit hand/skil
 fields, SpecialUsed/Available cooldowns, truncated and foreign cooldown replies,
 and delivery of cooldowns once.
 
+It also covers immediate corpse transfer delivery, unsigned packed handles,
+foreign/truncated/duplicate loot replies, vendor stock/open/select/confirm/close,
+loopback purchase requests, and immediate `AddTemplate` grants.
+
+`AO.Unity.Editor.CombatAnimationVerifier.Run` checks installed male/female/Atrox
+CAT attacks across five weapon stances against the actual motor presentation
+entry point. It verifies that stationary combat idle and attack start/right/left
+one-shots survive repeated movement samples and locomotion resumes afterwards.
+The verifier also checks all 63 installed Fair Trade shop identities/names using
+child-collider raycasts, rebinding to server runtime IDs, wall occlusion, and
+immediate zero-HP attack-bar shutdown with jump restoration cancelled. The
+raycast fixtures reproduce the placement/child-collider hierarchy; they do not
+test a live server session or render every terminal mesh.
+Run it with Unity batch mode while the project is closed, setting
+`PROJECTMAYHEM_AO_INSTALL` to the local installation path. This focused playback
+check does not replace a live TestScene attack/loot/vendor/relogin acceptance run.
+
 `AO.Client.GameplayMetadata.Tests.csproj` is an installed-data integration check:
 
 ```sh

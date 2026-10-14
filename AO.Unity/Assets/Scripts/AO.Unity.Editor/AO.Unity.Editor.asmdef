@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "AO.Unity",
+        "AO.Client",
         "WorldGen.Geometry",
         "glTFast",
         "WorldGen.Core",

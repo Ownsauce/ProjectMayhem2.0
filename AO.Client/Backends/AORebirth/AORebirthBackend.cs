@@ -106,6 +106,8 @@ namespace AO.Client.Backends.AORebirth
         private readonly Dictionary<string, WorldObject> _worldObjects =
             new Dictionary<string, WorldObject>();
         private InventorySnapshot _inventory;
+        private ShopSnapshot _shop;
+        private bool _shopChanged;
         private readonly Dictionary<int, InventorySnapshot> _containerInventories = new();
         private readonly List<InventorySnapshot> _changedContainerInventories = new();
         private readonly List<NanoEffectUpdate> _nanoEffects = new();
@@ -173,6 +175,7 @@ namespace AO.Client.Backends.AORebirth
             _nanoEffects.Clear(); _nanoEffectSnapshot = null; _nanoCasts.Clear(); _combatUpdates.Clear(); _combatTargets.Clear(); _specialCooldowns.Clear();
             _containerInventories.Clear();
             _changedContainerInventories.Clear();
+            _shop = null; _shopChanged = false;
             _characterState = null;
             _inventoryChanged = false;
             LastSelectedAppearanceDecodeFailure = null;
@@ -733,7 +736,7 @@ namespace AO.Client.Backends.AORebirth
             return new WorldDeltaBatch(deltas, new List<NearbyEntity>(_worldEntities.Values),
                 packetsObserved, movementPacketsObserved, unmatchedMovementPackets,
                 packetKindsObserved, packetSamplesObserved, inventory, serverMessages,
-                zoneTransfer, DrainContainerUpdates(), DrainNanoEffects(), DrainCombatUpdates(), DrainSpecialCooldowns(), DrainNanoCasts(), DrainNanoEffectSnapshot());
+                zoneTransfer, DrainContainerUpdates(), DrainNanoEffects(), DrainCombatUpdates(), DrainSpecialCooldowns(), DrainNanoCasts(), DrainNanoEffectSnapshot(), DrainShop());
         }
 
         private async Task<WorldBootstrapResult> ReconnectToZoneAsync(IPAddress address,
@@ -774,12 +777,108 @@ namespace AO.Client.Backends.AORebirth
             _nanoEffects.Clear(); _nanoEffectSnapshot = null; _nanoCasts.Clear(); _combatUpdates.Clear(); _combatTargets.Clear(); _specialCooldowns.Clear();
             _containerInventories.Clear();
             _changedContainerInventories.Clear();
+            _shop = null; _shopChanged = false;
             _worldEntities.Clear();
             _worldObjects.Clear();
             return bootstrap;
         }
 
         public InventorySnapshot GetInventorySnapshot() => _inventory;
+
+        private ShopSnapshot DrainShop()
+        {
+            var changed = _shopChanged ? _shop : null;
+            _shopChanged = false;
+            return changed;
+        }
+
+        public Task SelectShopItemAsync(int shopInstance, int stockSlot, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null || _shop?.IsOpen != true
+                || _shop.IdentityInstance != shopInstance || stockSlot < 0 || stockSlot >= _shop.Stock.Count)
+                throw new InvalidOperationException("Open the vendor before selecting its stock.");
+            return WritePacketAsync(AORebirthProtocol.CreateShopTrade(int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture),
+                5, _shop.IdentityType, shopInstance, stockSlot), cancellationToken);
+        }
+
+        public Task CompleteShopAsync(int shopInstance, bool buy, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            if (State != ClientConnectionState.InWorld || _selectedCharacter == null || _shop?.IsOpen != true
+                || _shop.IdentityInstance != shopInstance || (buy && _shop.SelectedSlots.Count == 0))
+                throw new InvalidOperationException("No active vendor purchase is available.");
+            return WritePacketAsync(AORebirthProtocol.CreateShopTrade(int.Parse(_selectedCharacter.Id, CultureInfo.InvariantCulture),
+                buy ? 3 : 2, _shop.IdentityType, shopInstance), cancellationToken);
+        }
+
+        private void CaptureShop(AORebirthPacket packet, int owner)
+        {
+            if (AORebirthProtocol.TryReadShopStock(packet, out var stock))
+            {
+                _shop = stock; _shopChanged = true;
+                return;
+            }
+            if (_shop == null || !AORebirthProtocol.TryReadShopTrade(packet, owner,
+                out int action, out int type, out int target, out int containerType, out int container)) return;
+            bool shopTarget = type == _shop.IdentityType && target == _shop.IdentityInstance;
+            if (action == 0 && shopTarget)
+                _shop = new ShopSnapshot(_shop.IdentityType, _shop.IdentityInstance, _shop.Stock, true);
+            else if (action == 5 && shopTarget && _shop.IsOpen && containerType == 104 && container >= 0 && container < _shop.Stock.Count)
+            {
+                var selected = new List<int>(_shop.SelectedSlots) { container };
+                _shop = new ShopSnapshot(_shop.IdentityType, _shop.IdentityInstance, _shop.Stock, true, selected);
+            }
+            else if ((action == 2 || action == 4) && _shop.IsOpen && (shopTarget || type == 0))
+                _shop = new ShopSnapshot(_shop.IdentityType, _shop.IdentityInstance, _shop.Stock);
+            else return;
+            _shopChanged = true;
+        }
+
+        private void CaptureInventoryGrant(AORebirthPacket packet, int owner)
+        {
+            if (_inventory == null) return;
+            if (AORebirthProtocol.TryReadContainerTransfer(packet, owner, out int handle, out int slot, out int destination))
+            {
+                // The acknowledgement names the packed source handle, not a worn/main page.
+                InventorySnapshot source = null;
+                foreach (var container in _containerInventories.Values)
+                    if (container.MainInventorySlot == handle) { source = container; break; }
+                if (source == null) return;
+                InventoryEntrySnapshot moving = null;
+                var remaining = new List<InventoryEntrySnapshot>();
+                foreach (var entry in source.Entries)
+                    if (entry.Slot == slot) moving = entry; else remaining.Add(entry);
+                if (moving == null) return; // Duplicate or unknown confirmation.
+                var carried = new List<InventoryEntrySnapshot>(_inventory.Entries);
+                foreach (var entry in carried)
+                    if ((entry.Slot >= 0x40 ? entry.Slot : entry.Slot + 0x40) == destination) return;
+                carried.Add(new InventoryEntrySnapshot(destination, moving.IdentityType, moving.IdentityInstance,
+                    moving.LowId, moving.HighId, moving.Quality, moving.Quantity));
+                _inventory = new InventorySnapshot(_inventory.Capacity, _inventory.ContainerType,
+                    _inventory.ContainerInstance, _inventory.MainInventorySlot, carried);
+                var changed = new InventorySnapshot(source.Capacity, source.ContainerType,
+                    source.ContainerInstance, source.MainInventorySlot, remaining);
+                _containerInventories[source.ContainerInstance] = changed;
+                _changedContainerInventories.Add(changed);
+                _inventoryChanged = true;
+            }
+            else if (AORebirthProtocol.TryReadItemGrant(packet, owner, out var granted))
+            {
+                // AddTemplate grants use the first free main slot, matching the server allocator.
+                var carried = new List<InventoryEntrySnapshot>(_inventory.Entries);
+                var occupied = new HashSet<int>();
+                foreach (var entry in carried) occupied.Add(entry.Slot >= 0x40 ? entry.Slot : entry.Slot + 0x40);
+                int free = 0x40;
+                while (occupied.Contains(free)) free++;
+                if (free >= 0x40 + Math.Min(30, _inventory.Capacity)) return;
+                carried.Add(new InventoryEntrySnapshot(free, granted.IdentityType, granted.IdentityInstance,
+                    granted.LowId, granted.HighId, granted.Quality, granted.Quantity));
+                _inventory = new InventorySnapshot(_inventory.Capacity, _inventory.ContainerType,
+                    _inventory.ContainerInstance, _inventory.MainInventorySlot, carried);
+                _inventoryChanged = true;
+            }
+        }
 
         public Task UseWorldObjectAsync(int identityType, int identityInstance, CancellationToken cancellationToken = default)
         {
@@ -1029,7 +1128,7 @@ namespace AO.Client.Backends.AORebirth
                             equipmentRevision: _characterState.EquipmentRevision);
                     }
                     string targetKey = EntityKey(combat.TargetType, combat.TargetInstance);
-                    if (_worldEntities.TryGetValue(targetKey, out var target))
+                    if (_worldEntities.TryGetValue(targetKey, out var target) && (target.Health > 0 || combat.TargetDied))
                     {
                         var changed = target.WithHealth(target.Health,
                             combat.TargetDied ? 0 : Math.Max(0, target.Health - target.HealthDamage - combat.Damage));
@@ -1047,6 +1146,11 @@ namespace AO.Client.Backends.AORebirth
             if (_selectedCharacter != null && int.TryParse(_selectedCharacter.Id, out int effectOwner)
                 && AORebirthProtocol.TryReadNanoEffect(packet, effectOwner, out var effect)) _nanoEffects.Add(effect);
             CaptureInventory(packet);
+            if (_selectedCharacter != null && int.TryParse(_selectedCharacter.Id, out int inventoryOwner))
+            {
+                CaptureInventoryGrant(packet, inventoryOwner);
+                CaptureShop(packet, inventoryOwner);
+            }
             CaptureCharacterState(packet);
             if (_selectedCharacter != null
                 && int.TryParse(_selectedCharacter.Id, out int ownerId)
@@ -1217,6 +1321,7 @@ namespace AO.Client.Backends.AORebirth
             _nanoEffects.Clear(); _nanoEffectSnapshot = null; _nanoCasts.Clear(); _combatUpdates.Clear(); _combatTargets.Clear(); _specialCooldowns.Clear();
             _containerInventories.Clear();
             _changedContainerInventories.Clear();
+            _shop = null; _shopChanged = false;
             _worldEntities.Clear();
             _worldObjects.Clear();
             SetState(ClientConnectionState.Disconnected, "Disconnected.");
@@ -1241,6 +1346,7 @@ namespace AO.Client.Backends.AORebirth
             _nanoEffects.Clear(); _nanoEffectSnapshot = null; _nanoCasts.Clear(); _combatUpdates.Clear(); _combatTargets.Clear(); _specialCooldowns.Clear();
             _containerInventories.Clear();
             _changedContainerInventories.Clear();
+            _shop = null; _shopChanged = false;
             _worldEntities.Clear();
             _worldObjects.Clear();
             State = ClientConnectionState.Disconnected;

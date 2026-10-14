@@ -174,6 +174,7 @@ public sealed class StatelParser
             dynel.IdentityInstance = placement.IdentityInstance;
             dynel.TemplateId = placement.TemplateId;
             dynel.DisplayName = placement.DisplayName;
+            dynel.AoPosition = placement.Position;
             go.name = $"{placement.DisplayName} ({placement.IdentityType}:{placement.IdentityInstance})";
         }
         // Sheared: slant baked into verts; packed scale applied on X only.
@@ -808,4 +809,5 @@ public sealed class NativePlacedDynel : MonoBehaviour
     public int IdentityInstance;
     public int TemplateId;
     public string DisplayName;
+    public Vector3 AoPosition;
 }

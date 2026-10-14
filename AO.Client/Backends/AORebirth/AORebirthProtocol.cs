@@ -663,6 +663,80 @@ namespace AO.Client.Backends.AORebirth
             new InventoryEntrySnapshot(slot, item.IdentityType, item.IdentityInstance,
                 item.LowId, item.HighId, item.Quality, item.Quantity);
 
+        public static bool TryReadContainerTransfer(AORebirthPacket packet, int owner,
+            out int handle, out int slot, out int destination)
+        {
+            handle = slot = destination = 0;
+            if (!TryCreateN3Reader(packet, 0x47537a24, 33, out var reader)) return false;
+            if (reader.ReadInt32() != 50000 || reader.ReadInt32() != owner) return false;
+            reader.ReadByte();
+            if (reader.ReadInt32() != 107) return false;
+            uint packed = unchecked((uint)reader.ReadInt32());
+            if (reader.ReadInt32() != 50000 || reader.ReadInt32() != owner) return false;
+            destination = reader.ReadInt32();
+            handle = (int)(packed >> 16); slot = (int)(packed & 0xffff);
+            return handle > 0 && destination >= 0x40 && destination <= 0x5d;
+        }
+
+        public static bool TryReadItemGrant(AORebirthPacket packet, int owner, out InventoryEntrySnapshot item)
+        {
+            item = null;
+            if (!TryCreateN3Reader(packet, 0x052e2f0c, 29, out var reader)) return false;
+            if (reader.ReadInt32() != 50000 || reader.ReadInt32() != owner) return false;
+            reader.ReadByte();
+            int high = reader.ReadInt32(), low = reader.ReadInt32(), quality = reader.ReadInt32(), count = reader.ReadInt32();
+            if (high <= 0 || low <= 0 || quality <= 0 || count <= 0) return false;
+            item = new InventoryEntrySnapshot(0, 50002, 0, low, high, quality, count);
+            return true;
+        }
+
+        public static bool TryReadShopStock(AORebirthPacket packet, out ShopSnapshot shop)
+        {
+            shop = null;
+            if (!TryCreateN3Reader(packet, 0x58362220, 17, out var reader)) return false;
+            try
+            {
+                int type = reader.ReadInt32(), id = reader.ReadInt32(); reader.ReadByte();
+                int encoded = reader.ReadInt32();
+                int count = encoded / 0x3f1 - 1;
+                if (type != 51035 || id <= 0 || encoded % 0x3f1 != 0 || count < 0 || count > 4096) return false;
+                var stock = new List<InventoryEntrySnapshot>(count);
+                for (int i = 0; i < count; i++)
+                {
+                    int low = reader.ReadInt32(), high = reader.ReadInt32(), quality = reader.ReadInt32();
+                    if (low <= 0 || high <= 0 || quality <= 0) return false;
+                    stock.Add(new InventoryEntrySnapshot(i, 0, 0, low, high, quality, 1));
+                }
+                shop = new ShopSnapshot(type, id, stock);
+                return true;
+            }
+            catch (EndOfStreamException) { return false; }
+        }
+
+        public static bool TryReadShopTrade(AORebirthPacket packet, int owner, out int action,
+            out int targetType, out int target, out int containerType, out int container)
+        {
+            action = targetType = target = containerType = container = 0;
+            if (!TryCreateN3Reader(packet, 0x36284f6e, 34, out var reader)) return false;
+            if (reader.ReadInt32() != 50000 || reader.ReadInt32() != owner) return false;
+            reader.ReadByte(); reader.ReadInt32(); action = reader.ReadByte();
+            targetType = reader.ReadInt32(); target = reader.ReadInt32();
+            containerType = reader.ReadInt32(); container = reader.ReadInt32();
+            return true;
+        }
+
+        public static byte[] CreateShopTrade(int owner, int action, int shopType, int shopId, int slot = 0)
+        {
+            if (owner <= 0 || (action != 2 && action != 3 && action != 5) || shopType != 51035 || shopId <= 0 || slot < 0)
+                throw new ArgumentOutOfRangeException(nameof(action));
+            using var body = new MemoryStream();
+            WriteInt32(body, 0x36284f6e); WriteInt32(body, 50000); WriteInt32(body, owner); body.WriteByte(0);
+            WriteInt32(body, 2); body.WriteByte((byte)action);
+            WriteInt32(body, shopType); WriteInt32(body, shopId);
+            WriteInt32(body, action == 5 ? 104 : shopType); WriteInt32(body, action == 5 ? slot : shopId);
+            return CreateN3Packet(owner, body.ToArray());
+        }
+
         public static byte[] CreatePlayerMovement(int characterId,
             PlayerMovementUpdate movement)
         {

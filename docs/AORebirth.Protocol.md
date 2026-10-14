@@ -18,6 +18,31 @@ playfield, and either a direct transform or a link to the positioning NPC.
 Door and corpse envelopes are recognized by identity; their remaining
 capture-dependent payload fields are intentionally not interpreted yet.
 
+## Implemented corpse transfers and vendor purchases
+
+`ContainerAddItem` (0x47537A24) confirms corpse transfers using source page 107
+and an unsigned packed handle/slot. Resolve the item from the opened container,
+apply the server's concrete main-inventory destination, and publish both changed
+snapshots. Foreign, truncated, unknown-source, duplicate, and occupied-slot
+confirmations do not create items.
+
+`ShopUpdate` (0x58362220) supplies indexed low/high template pairs and QL.
+`Trade` (0x36284F6E) opens the shop, acknowledges stock selections, and completes
+or declines it. A purchase sends AddItem followed by Confirm after the selection
+acknowledgement. `AddTemplate` (0x052E2F0C) grants the accepted item into the first
+free main slot; credit changes arrive through authoritative stats. Shop stock
+does not include prices; the server calculates the purchase cost at commit.
+These layouts are checked against AORebirth's `InventoryMoveService`,
+`TradeService`, `ShopStock`, and messaging contracts in the sibling checkout.
+The current UI supports buying; selling and player-to-player trade remain separate work.
+
+AORebirth allocates a runtime vending-machine ID for static placements. Bind the
+rendered terminal's original AO position to its `VendingMachineFullUpdate` before
+sending Use or accepting stock. NPC-owned machines are opened through their
+linked NPC identity; shop/trade replies retain the machine identity. An explicit
+zero-HP update is a death even when the initial maximum HP was omitted, and that
+state survives movement and appearance updates.
+
 ## Information Required
 
 - Endpoint discovery and server version negotiation

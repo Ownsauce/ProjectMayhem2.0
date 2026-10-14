@@ -141,6 +141,19 @@ namespace AO.Unity.Prototype
         private AOStyleUiFactory.WindowRefs _npcDialogWindow;
         private AOStyleUiFactory.WindowRefs _lookAtWindow;
         private AOStyleUiFactory.WindowRefs _corpseLootWindow;
+        private AOStyleUiFactory.WindowRefs _vendorWindow;
+        private RectTransform _vendorStockRoot;
+        private Text _vendorSelectionText;
+        private Button _vendorBuyButton;
+        private ShopSnapshot _nativeShop;
+        private string _nativeVendorName;
+        private int _nativeVendorInstance;
+        private bool _vendorClosing;
+        private bool _vendorRequestPending;
+        private int _vendorRequestVersion;
+        private Font _vendorFont;
+        private WorldObject _selectedNativeVendor;
+        private Transform _selectedNativeVendorVisual;
         private AOStyleUiFactory.WindowRefs _f10Window;
         private AOStyleUiFactory.WindowRefs _chatWindow;
         private AOStyleUiFactory.WindowRefs _f10UnsavedWindow;
@@ -395,6 +408,7 @@ namespace AO.Unity.Prototype
                 _corpseLootWindow.CloseButton.onClick.AddListener(CloseCorpseLootWindow);
             }
             _corpseLootWindow.Root.gameObject.SetActive(false);
+            BuildVendorWindow(body, font);
 
             _f10Window = AOStyleUiFactory.CreateWindow(body, font, "F10 Settings", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
             ConfigureWindowFrame(_f10Window, new Vector2(920f, 680f), new Vector2(0f, 10f), new Vector2(640f, 420f), new Vector2(1300f, 900f));
@@ -604,6 +618,7 @@ namespace AO.Unity.Prototype
                 _gameServerSession.NanoEffectChanged -= HandleServerNanoEffect;
                 _gameServerSession.NanoEffectsRestored -= HandleServerNanoSnapshot;
                 _gameServerSession.InventoryChanged -= HandleServerInventoryChanged;
+                _gameServerSession.ShopChanged -= HandleServerShopChanged;
                 _gameServerSession.CharacterStateChanged -= HandleServerCharacterStateChanged;
                 _gameServerSession.EntityRemoved -= HandleNativeEntityRemoved;
             }
@@ -801,7 +816,10 @@ namespace AO.Unity.Prototype
             bool rightClickPressed = Input.GetMouseButtonDown(1);
 #endif
             if (!textInputFocused && f1Pressed && _selfBridge != null)
+            {
+                _selectedNativeVendor = null; _selectedNativeVendorVisual = null;
                 _context?.TrySetSelectedTarget(_selfBridge);
+            }
 
             if ((!clickPressed && !rightClickPressed) || EventSystem.current == null || EventSystem.current.IsPointerOverGameObject())
                 return;
@@ -815,7 +833,23 @@ namespace AO.Unity.Prototype
             Vector2 mouse = Input.mousePosition;
 #endif
             var ray = Camera.main.ScreenPointToRay(mouse);
+            if (_context?.IsNativeGameplay == true && _gameServerSession != null
+                && _gameServerSession.TryResolveVendorFromRay(ray, out var vendor, out var vendorVisual))
+            {
+                _context.TrySetSelectedTarget(null);
+                _selectedNativeVendor = vendor; _selectedNativeVendorVisual = vendorVisual;
+                _context.PublishStatus($"Selected shop: {vendor.Name}");
+                if (rightClickPressed) RequestNativeVendor(ray, null);
+                return;
+            }
             CharacterRuntimeBridge bridge = ResolveBridgeFromRay(ray, out _);
+            if (bridge != null) { _selectedNativeVendor = null; _selectedNativeVendorVisual = null; }
+            if (rightClickPressed && _context?.IsNativeGameplay == true)
+            {
+                if (IsDeadCorpseTarget(bridge)) OpenCorpseLootWindow(bridge);
+                else RequestNativeVendor(ray, bridge);
+                return;
+            }
             if (bridge != null)
             {
                 if (clickPressed)
@@ -831,32 +865,196 @@ namespace AO.Unity.Prototype
                         return;
                     }
 
-                    _activeNpcDialogTarget = bridge;
-
-                    bool requestedAuthoritativeQuest = false;
-                    if (_authoritativeClient != null && _authoritativeClient.IsConnected)
-                    {
-                        var runtimeTrigger = bridge.GetComponentInParent<AuthoritativeRuntimeInteractionTrigger>();
-                        if (runtimeTrigger != null)
-                        {
-                            runtimeTrigger.RequestInteractionFromUi();
-                            requestedAuthoritativeQuest = true;
-                        }
-                    }
-                    if (!requestedAuthoritativeQuest)
-                        requestedAuthoritativeQuest = TryRequestAuthoritativeQuestDialog(bridge);
-
-                    if (IsAttackableRuntimeEntity(bridge))
-                        return;
-
-                    if (!requestedAuthoritativeQuest
-                        && _context != null
-                        && _context.TryInteractWithTarget(bridge, out string title, out string body))
-                    {
-                        ShowNpcDialog(title, body);
-                    }
+                    InteractWithNpcTarget(bridge);
                 }
             }
+        }
+
+        private void InteractWithNpcTarget(CharacterRuntimeBridge bridge)
+        {
+            if (bridge == null) return;
+            _activeNpcDialogTarget = bridge;
+
+            bool requestedAuthoritativeQuest = false;
+            if (_authoritativeClient != null && _authoritativeClient.IsConnected)
+            {
+                var runtimeTrigger = bridge.GetComponentInParent<AuthoritativeRuntimeInteractionTrigger>();
+                if (runtimeTrigger != null)
+                {
+                    runtimeTrigger.RequestInteractionFromUi();
+                    requestedAuthoritativeQuest = true;
+                }
+            }
+            if (!requestedAuthoritativeQuest)
+                requestedAuthoritativeQuest = TryRequestAuthoritativeQuestDialog(bridge);
+
+            if (IsAttackableRuntimeEntity(bridge))
+                return;
+
+            if (!requestedAuthoritativeQuest
+                && _context != null
+                && _context.TryInteractWithTarget(bridge, out string title, out string body))
+            {
+                ShowNpcDialog(title, body);
+            }
+        }
+
+        private void BuildVendorWindow(RectTransform body, Font font)
+        {
+            _vendorFont = font;
+            _vendorWindow = AOStyleUiFactory.CreateWindow(body, font, "Shop", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+            _vendorWindow.Root.sizeDelta = new Vector2(440f, 420f);
+            _vendorWindow.CloseButton.onClick.RemoveAllListeners();
+            _vendorWindow.CloseButton.onClick.AddListener(() => CompleteNativeShop(false));
+            var content = _vendorWindow.Content;
+            _vendorSelectionText = AOStyleUiFactory.CreateText("Selection", content, "Loading stock...", font, 12, TextAnchor.UpperLeft);
+            var selection = _vendorSelectionText.rectTransform;
+            selection.anchorMin = new Vector2(0, 0); selection.anchorMax = new Vector2(1, 0);
+            selection.offsetMin = new Vector2(8, 34); selection.offsetMax = new Vector2(-8, 72);
+            _vendorBuyButton = AOStyleUiFactory.CreateButton("Buy", content, "Buy selected", font, () => CompleteNativeShop(true), 140);
+            var buy = (RectTransform)_vendorBuyButton.transform;
+            buy.anchorMin = buy.anchorMax = new Vector2(1, 0); buy.pivot = new Vector2(1, 0);
+            buy.anchoredPosition = new Vector2(-8, 4); buy.sizeDelta = new Vector2(140, 26);
+            _vendorBuyButton.interactable = false;
+            var scrollGo = new GameObject("StockScroll", typeof(RectTransform), typeof(ScrollRect));
+            scrollGo.transform.SetParent(content, false);
+            var scrollRt = (RectTransform)scrollGo.transform;
+            scrollRt.anchorMin = Vector2.zero; scrollRt.anchorMax = Vector2.one;
+            scrollRt.offsetMin = new Vector2(8, 78); scrollRt.offsetMax = new Vector2(-8, -6);
+            var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            viewportGo.transform.SetParent(scrollRt, false);
+            var viewport = (RectTransform)viewportGo.transform;
+            viewport.anchorMin = Vector2.zero; viewport.anchorMax = Vector2.one;
+            viewport.offsetMin = viewport.offsetMax = Vector2.zero;
+            viewportGo.GetComponent<Mask>().showMaskGraphic = false;
+            var stockGo = new GameObject("Stock", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            stockGo.transform.SetParent(viewport, false);
+            _vendorStockRoot = (RectTransform)stockGo.transform;
+            _vendorStockRoot.anchorMin = new Vector2(0, 1); _vendorStockRoot.anchorMax = Vector2.one;
+            _vendorStockRoot.pivot = new Vector2(0.5f, 1); _vendorStockRoot.sizeDelta = Vector2.zero;
+            var layout = stockGo.GetComponent<VerticalLayoutGroup>();
+            layout.spacing = 4; layout.childControlHeight = true; layout.childForceExpandHeight = false;
+            stockGo.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            var scroll = scrollGo.GetComponent<ScrollRect>();
+            scroll.viewport = viewport; scroll.content = _vendorStockRoot;
+            scroll.horizontal = false; scroll.scrollSensitivity = 24; scroll.movementType = ScrollRect.MovementType.Clamped;
+            _vendorWindow.Root.gameObject.SetActive(false);
+        }
+
+        private async void RequestNativeVendor(Ray ray, CharacterRuntimeBridge bridge)
+        {
+            if (_gameServerSession?.IsInWorld != true || bridge?.ServerEntity?.IsDead == true) return;
+            try
+            {
+                var vendor = await _gameServerSession.ResolveVendorAsync(ray, bridge);
+                if (vendor == null) { InteractWithNpcTarget(bridge); return; }
+                if (_nativeShop?.IsOpen == true && _nativeShop.IdentityInstance == vendor.IdentityInstance)
+                {
+                    _vendorWindow.Root.gameObject.SetActive(true); _vendorWindow.Root.SetAsLastSibling(); return;
+                }
+                _nativeVendorName = vendor.Name;
+                _nativeVendorInstance = vendor.IdentityInstance; _vendorClosing = false;
+                _nativeShop = null; _vendorRequestPending = false; ++_vendorRequestVersion;
+                AOStyleUiFactoryCleanup.Clear(_vendorStockRoot);
+                _vendorSelectionText.text = "Loading stock..."; _vendorBuyButton.interactable = false;
+                _vendorWindow.Title.text = string.IsNullOrWhiteSpace(vendor.Name) ? "Shop" : vendor.Name;
+                _vendorWindow.Root.gameObject.SetActive(true); _vendorWindow.Root.SetAsLastSibling();
+                int version = _vendorRequestVersion;
+                await _gameServerSession.UseWorldObjectAsync(
+                    vendor.LinkedIdentityInstance > 0 ? vendor.LinkedIdentityType : vendor.IdentityType,
+                    vendor.LinkedIdentityInstance > 0 ? vendor.LinkedIdentityInstance : vendor.IdentityInstance);
+                await System.Threading.Tasks.Task.Delay(15000);
+                if (this != null && version == _vendorRequestVersion && !_vendorClosing && _nativeShop?.IsOpen != true)
+                    _vendorSelectionText.text = "Shop did not open. Move closer and try again.";
+            }
+            catch (Exception exception) { _context?.PublishStatus($"Shop failed: {exception.Message}"); }
+        }
+
+        private void HandleServerShopChanged(ShopSnapshot shop)
+        {
+            if (shop.IdentityInstance != _nativeVendorInstance) return;
+            bool wasOpen = _nativeShop?.IsOpen == true;
+            _nativeShop = shop; _vendorRequestPending = false; ++_vendorRequestVersion;
+            if (!shop.IsOpen)
+            {
+                _vendorBuyButton.interactable = false;
+                if (wasOpen) _vendorWindow.Root.gameObject.SetActive(false);
+                return;
+            }
+            if (_vendorClosing) { CompleteNativeShop(false); return; }
+            _vendorWindow.Root.gameObject.SetActive(true);
+            _vendorWindow.Title.text = string.IsNullOrWhiteSpace(_nativeVendorName) ? "Shop" : _nativeVendorName;
+            AOStyleUiFactoryCleanup.Clear(_vendorStockRoot);
+            foreach (var item in shop.Stock)
+            {
+                int slot = item.Slot, aoid = item.LowId;
+                string name = $"Item {aoid}";
+                if (AO.Unity.Assets.AOItemObjectResolver.TryResolve(item.LowId, item.HighId, item.Quality, out var raw))
+                {
+                    aoid = raw.AOID; name = raw.Name;
+                    AODataManager.Instance?.RegisterRuntimeItem(raw, item.LowId, item.HighId);
+                }
+                int selected = shop.SelectedSlots.Count(index => index == slot);
+                var button = AOStyleUiFactory.CreateButton("Stock_" + slot, _vendorStockRoot,
+                    $"{name}   QL {item.Quality}" + (selected > 0 ? $"   ×{selected}" : string.Empty), _vendorFont,
+                    () => SelectNativeShopItem(slot), 400);
+                button.GetComponent<LayoutElement>().preferredHeight = 38;
+                var text = button.GetComponentInChildren<Text>(); text.alignment = TextAnchor.MiddleLeft;
+                text.rectTransform.offsetMin = new Vector2(42, 0);
+                var iconGo = new GameObject("Icon", typeof(RectTransform), typeof(Image));
+                iconGo.transform.SetParent(button.transform, false);
+                var iconRt = (RectTransform)iconGo.transform;
+                iconRt.anchorMin = iconRt.anchorMax = new Vector2(0, 0.5f); iconRt.pivot = new Vector2(0, 0.5f);
+                iconRt.anchoredPosition = new Vector2(3, 0); iconRt.sizeDelta = new Vector2(32, 32);
+                var core = AODataManager.Instance?.GetCoreInstance(aoid);
+                var icon = iconGo.GetComponent<Image>(); icon.sprite = core != null ? _context?.GetIconForCore(core) : null;
+                icon.preserveAspect = true; icon.raycastTarget = false; icon.enabled = icon.sprite != null;
+                var tooltip = button.gameObject.AddComponent<ItemHoverTooltip>(); tooltip.InstanceId = aoid;
+            }
+            _vendorSelectionText.text = shop.SelectedSlots.Count > 0
+                ? $"Selected: {shop.SelectedSlots.Count} item(s). Click Buy selected to purchase."
+                : "Click an item to add it to your purchase.";
+            _vendorBuyButton.interactable = shop.SelectedSlots.Count > 0;
+        }
+
+        private async void SelectNativeShopItem(int slot)
+        {
+            if (_nativeShop?.IsOpen != true || _vendorRequestPending) return;
+            _vendorRequestPending = true; _vendorBuyButton.interactable = false;
+            int version = ++_vendorRequestVersion;
+            try
+            {
+                await _gameServerSession.SelectShopItemAsync(_nativeShop.IdentityInstance, slot);
+                await System.Threading.Tasks.Task.Delay(15000);
+                if (this != null && version == _vendorRequestVersion && _vendorRequestPending)
+                {
+                    _vendorSelectionText.text = "Selection was not confirmed. Close and reopen the shop before retrying.";
+                }
+            }
+            catch (Exception exception) { _vendorRequestPending = false; _context?.PublishStatus($"Shop failed: {exception.Message}"); }
+        }
+
+        private async void CompleteNativeShop(bool buy)
+        {
+            if (!buy) _vendorClosing = true;
+            if (_nativeShop?.IsOpen != true)
+            {
+                if (!buy) _vendorWindow.Root.gameObject.SetActive(false);
+                return;
+            }
+            if (buy && _vendorRequestPending) return;
+            _vendorRequestPending = true; _vendorBuyButton.interactable = false;
+            int version = ++_vendorRequestVersion;
+            try
+            {
+                await _gameServerSession.CompleteShopAsync(_nativeShop.IdentityInstance, buy);
+                if (!buy) _vendorWindow.Root.gameObject.SetActive(false);
+                else _vendorSelectionText.text = "Waiting for purchase confirmation...";
+                await System.Threading.Tasks.Task.Delay(15000);
+                if (this != null && version == _vendorRequestVersion && _vendorRequestPending)
+                    _vendorSelectionText.text = "Purchase was not confirmed. Close and reopen the shop before retrying.";
+            }
+            catch (Exception exception) { _vendorRequestPending = false; _context?.PublishStatus($"Shop failed: {exception.Message}"); }
         }
 
         private static bool IsAttackableRuntimeEntity(CharacterRuntimeBridge bridge)
@@ -2370,6 +2568,16 @@ namespace AO.Unity.Prototype
                 return;
 
             var target = _context.SelectedTarget;
+            if (target == null && _selectedNativeVendor != null && _selectedNativeVendorVisual != null
+                && _selectedNativeVendorVisual.gameObject.activeInHierarchy)
+            {
+                _targetMarkerRoot.gameObject.SetActive(false);
+                if (_topTargetBarRoot != null) _topTargetBarRoot.gameObject.SetActive(true);
+                if (_targetHealthBarRoot != null) _targetHealthBarRoot.gameObject.SetActive(false);
+                _targetMarkerText.text = _selectedNativeVendor.Name;
+                _topTargetNameText.text = _selectedNativeVendor.Name;
+                return;
+            }
             if (target == null)
             {
                 _targetMarkerRoot.gameObject.SetActive(false);
@@ -2605,6 +2813,7 @@ namespace AO.Unity.Prototype
             return IsBlockingWindowAt(_npcDialogWindow, screenPoint)
                    || IsBlockingWindowAt(_lookAtWindow, screenPoint)
                    || IsBlockingWindowAt(_corpseLootWindow, screenPoint)
+                   || IsBlockingWindowAt(_vendorWindow, screenPoint)
                    || IsBlockingWindowAt(_itemBrowserWindow, screenPoint)
                    || IsBlockingWindowAt(_inventoryWindow, screenPoint)
                    || IsBlockingWindowAt(_backpackWindow, screenPoint)

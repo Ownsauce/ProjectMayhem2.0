@@ -2,6 +2,29 @@
 
 Last updated: 2026-10-13
 
+## October 13 combat, loot, and shop interaction follow-up
+
+- Motor input preserves CAT attack one-shots and stationary combat idle. Explicit
+  zero HP immediately hides attack/recharge progress, including when maximum HP
+  was omitted, and cancels pending combat-pose restoration after jumping.
+- Corpse transfer acknowledgements refresh main inventory and remaining loot
+  immediately. Purchase item grants also refresh inventory without relogging.
+- Fair Trade terminals can be selected by name through their rendered child
+  colliders. Opening matches the native placement to the server's runtime shop
+  identity; NPC shops open through their linked NPC. Stock, selection acceptance,
+  purchase grants, and credit changes come from server replies.
+
+Verification: world-delta/loopback regressions pass, and Client, Unity runtime,
+and editor source compile with zero errors. The isolated Unity verifier checks
+all 63 installed Fair Trade shop identities using child-collider fixtures,
+runtime-ID rebinding, wall occlusion, immediate zero-HP bar shutdown, and combat
+playback across three character profiles and five weapon stances. The user reports
+the latest changes are much better. Complete live shop purchases, rejection
+feedback, and relog persistence still need acceptance testing; fixture checks do
+not establish every rendered mesh or a live server transaction.
+See [Unity behavior](AO.Unity.md), [protocol details](AORebirth.Protocol.md), and
+[verification guidance](../tests/README.md).
+
 ## October 13 capture compatibility and native world fixes
 
 Four recorded stock-client sessions now supply replay fixtures for movement,

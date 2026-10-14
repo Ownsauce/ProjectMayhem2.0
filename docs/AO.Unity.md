@@ -17,6 +17,22 @@
 
 ## Key Areas
 
+Native gameplay presentation preserves active CAT one-shots during motor input
+and uses combat idle while stationary and attacking. Right-clicking a linked
+vendor NPC or discovered vending machine requests server stock and opens the
+shop window. Select items, then use **Buy selected**; accepted grants refresh the
+inventory immediately. Closing sends a decline. Confirmation timeouts do not
+retry purchases or invent inventory/credit changes. Corpse loot refreshes the
+inventory and remaining loot on the server transfer acknowledgement.
+
+Native placed shop meshes are selected through their `NativePlacedDynel` parent,
+including child mesh colliders. Selection displays the template's shop name.
+Opening binds its original AO position to the server-advertised runtime machine;
+the placement ID is not assumed to be the server's shop ID. NPC-owned shops open
+through the linked NPC while their stock remains keyed to the machine. Zero-HP
+targets stop the attack/recharge bar immediately and cancel pending combat pose
+restoration after jumping.
+
 - `AO.Unity/Assets/Scripts/AO.Unity/World`
 - `AO.Unity/Assets/Scripts/AO.Unity/Prototype`
 - `AO.Unity/Assets/Scripts/AO.Unity/AOStyle`

@@ -72,6 +72,9 @@ namespace AO.Client
         Task UseItemAsync(ItemLocation location, CancellationToken cancellationToken = default);
         Task UseWorldObjectAsync(int identityType, int identityInstance, CancellationToken cancellationToken = default);
 
+        Task SelectShopItemAsync(int shopInstance, int stockSlot, CancellationToken cancellationToken = default);
+        Task CompleteShopAsync(int shopInstance, bool buy, CancellationToken cancellationToken = default);
+
         Task UseSpecialAttackAsync(int statId, int targetType, int targetInstance, CancellationToken cancellationToken = default);
 
         Task SetAttackTargetAsync(int targetType, int targetInstance, CancellationToken cancellationToken = default);

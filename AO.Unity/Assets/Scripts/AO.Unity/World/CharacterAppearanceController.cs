@@ -2661,10 +2661,13 @@ namespace AO.Unity.World
 
             CatAnimPlayer directAnim = _spawnedPrefabVisual
                 .GetComponentInChildren<CatAnimPlayer>(true);
-            if (directAnim == null)
+            if (directAnim == null || directAnim.IsPlayingOneShot || _externalDeathPlaybackLocked)
                 return;
 
-            directAnim.Play(ResolveDirectLocomotionLogicalName(
+            bool stationaryCombat = attackToggleActive
+                && AO.Unity.Prototype.PrototypeUiContext.Active?.IsNativeGameplay == true
+                && Mathf.Abs(forward) <= 0.001f && Mathf.Abs(strafe) <= 0.001f;
+            directAnim.Play(stationaryCombat ? "attack-idle" : ResolveDirectLocomotionLogicalName(
                 forward > 0.001f,
                 forward < -0.001f,
                 strafe < -0.001f,
@@ -3144,6 +3147,7 @@ namespace AO.Unity.World
 
         private void EndAttackCombatSequence()
         {
+            _restoreAttackPoseAfterJump = false;
             _attackRuleOneShotEndTime = 0f;
             _attackRuleNextHitTime = 0f;
             _attackRuleHitCounter = 0;
@@ -4786,6 +4790,13 @@ namespace AO.Unity.World
 
         private void UpdateServerAttackProgress()
         {
+            var context = AO.Unity.Prototype.PrototypeUiContext.Active;
+            var target = context?.SelectedTarget?.ServerEntity;
+            if (attackToggleActive && target?.IsDead == true)
+            {
+                context.StopNativeAttackForTarget(target.IdentityType, target.IdentityInstance);
+                SetServerAttackActive(false);
+            }
             if (!attackToggleActive || _sitToggled || _sitTransitionPlaying)
             {
                 _attackCycleRunning = false;
@@ -4844,7 +4855,14 @@ namespace AO.Unity.World
                 StartAttackRechargePhase();
             }
             var directAnim = _spawnedPrefabVisual?.GetComponentInChildren<CatAnimPlayer>(true);
-            if (directAnim == null) return TryPlayRecentAttackHitAction(out _);
+            if (directAnim == null)
+            {
+                bool wasAttacking = attackToggleActive;
+                bool played = TryPlayRecentAttackHitAction(out _);
+                attackToggleActive = wasAttacking;
+                if (!wasAttacking) EndAttackCombatSequence();
+                return played;
+            }
             directAnim.SetAnimSet(ResolveDirectWeaponSet(handSlot));
             string action = specialStat == 148 ? "special-burst" : specialStat == 167 ? "special-fullauto"
                 : specialStat == 142 ? "special-brawl" : specialStat == 144 ? "special-dimach" : "attack-hit";

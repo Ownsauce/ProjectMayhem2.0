@@ -297,6 +297,66 @@ namespace AO.Unity.World
         }
 
         public event Action<InventorySnapshot> InventoryChanged;
+        public event Action<ShopSnapshot> ShopChanged;
+        private readonly Dictionary<Collider, WorldObject> _vendorMarkers = new();
+
+        public bool TryResolveVendorFromRay(Ray ray, out WorldObject vendor, out Transform visual)
+        {
+            vendor = null; visual = null;
+            var hits = Physics.RaycastAll(ray, 5000f, ~0, QueryTriggerInteraction.Ignore);
+            Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+            if (hits.Length == 0) return false;
+            var hit = hits[0];
+            var placed = hit.collider.GetComponentInParent<NativePlacedDynel>();
+            if (placed != null && placed.IdentityType == 51035)
+            {
+                // The placement identifies the visual. The backend may assign a different
+                // runtime identity; resolve that from the server before sending Use.
+                vendor = new WorldObject(placed.IdentityType, placed.IdentityInstance,
+                    WorldObjectKind.VendingMachine, placed.DisplayName, 0, true,
+                    placed.AoPosition.x, placed.AoPosition.y, placed.AoPosition.z);
+                visual = placed.transform;
+                return true;
+            }
+            if (_vendorMarkers.TryGetValue(hit.collider, out vendor))
+            {
+                visual = hit.collider.transform;
+                return true;
+            }
+            return false;
+        }
+
+        public async Task<WorldObject> ResolveVendorAsync(Ray ray, CharacterRuntimeBridge target)
+        {
+            if (!IsInWorld) return null;
+            var objects = await _backend.GetWorldObjectsAsync(_lifetime.Token);
+            if (TryResolveVendorFromRay(ray, out var placedVendor, out _))
+            {
+                WorldObject match = null;
+                foreach (var item in objects)
+                {
+                    if (item.Kind != WorldObjectKind.VendingMachine || item.LinkedIdentityInstance != 0 || !item.HasPosition) continue;
+                    if ((new Vector3(item.X, item.Y, item.Z) - new Vector3(placedVendor.X, placedVendor.Y, placedVendor.Z)).sqrMagnitude > 0.0025f) continue;
+                    if (match != null) throw new InvalidOperationException("The server supplied ambiguous shop identities for this terminal.");
+                    match = item;
+                }
+                if (match != null) return match;
+                throw new InvalidOperationException("The server has not supplied this terminal's shop. Move closer and try again.");
+            }
+            if (target?.ServerEntity != null)
+                foreach (var item in objects)
+                    if (item.Kind == WorldObjectKind.VendingMachine
+                        && item.LinkedIdentityType == target.ServerEntity.IdentityType
+                        && item.LinkedIdentityInstance == target.ServerEntity.IdentityInstance) return item;
+            if (target != null) return null;
+            return null;
+        }
+
+        public Task SelectShopItemAsync(int shopInstance, int stockSlot)
+            => _backend.SelectShopItemAsync(shopInstance, stockSlot, _lifetime.Token);
+
+        public Task CompleteShopAsync(int shopInstance, bool buy)
+            => _backend.CompleteShopAsync(shopInstance, buy, _lifetime.Token);
         public event Action<CharacterStateSnapshot> CharacterStateChanged;
         public event Action<DungeonLayout> ProceduralLayoutVerified;
         public InventorySnapshot CurrentInventory => _backend?.GetInventorySnapshot();
@@ -870,6 +930,7 @@ namespace AO.Unity.World
                 UpsertEntityPlaceholder(entity);
             }
 
+            _vendorMarkers.Clear();
             foreach (WorldObject worldObject in objects.Where(item => item.HasPosition))
             {
                 if (worldObject.CorpseAppearance != null)
@@ -879,12 +940,17 @@ namespace AO.Unity.World
                         corpseActor.transform.rotation = new Quaternion(worldObject.HeadingX, worldObject.HeadingY, worldObject.HeadingZ, worldObject.HeadingW).normalized;
                     continue;
                 }
+                // NPC vendors already have a selectable character visual at their linked identity.
+                if (worldObject.Kind == WorldObjectKind.VendingMachine && worldObject.LinkedIdentityInstance > 0)
+                    continue;
                 GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 marker.name = $"{worldObject.Kind} {worldObject.Name}";
                 marker.transform.SetParent(_placeholderRoot, false);
                 marker.transform.position = ToUnityWorldPosition(
                     worldObject.X, worldObject.Y, worldObject.Z, bootstrap);
                 marker.transform.localScale = new Vector3(1.2f, 1.8f, 1.2f);
+                if (worldObject.Kind == WorldObjectKind.VendingMachine)
+                    _vendorMarkers[marker.GetComponent<Collider>()] = worldObject;
                 Renderer renderer = marker.GetComponent<Renderer>();
                 if (renderer != null)
                     SetRendererColor(renderer, new Color(0.2f, 0.9f, 0.55f));
@@ -977,6 +1043,7 @@ namespace AO.Unity.World
                         InventoryChanged?.Invoke(batch.Inventory);
                     foreach (var container in batch.ContainerInventories)
                         InventoryChanged?.Invoke(container);
+                    if (batch.Shop != null) ShopChanged?.Invoke(batch.Shop);
                     foreach (var cooldown in batch.SpecialCooldowns) AO.Unity.Prototype.PrototypeUiContext.Active?.ApplyServerSpecialCooldown(cooldown);
                     foreach (var combat in batch.CombatUpdates) ApplyCombatUpdate(combat);
                     foreach (var cast in batch.NanoCasts) ApplyNanoCastUpdate(cast);

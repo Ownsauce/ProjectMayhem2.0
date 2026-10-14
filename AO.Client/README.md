@@ -72,8 +72,17 @@ handle/slot address. Rechargers, stims, nano crystals, and backpack opening use
 this path. Effects and consumption remain server-owned. UploadNano replies update
 the acknowledged program list, and container inventory updates are delivered
 separately from the main inventory. Known backpack open replies republish cached
-contents. Backpack handles are cleared when the world/session changes. Container
+contents. Backpack handles are cleared when the world/session changes. Corpse
+transfer acknowledgements apply confirmed packed handle/slot moves to main
+inventory and publish both changed snapshots immediately. General backpack
 item moves still require a separate transfer implementation.
+
+Vendor stock and acknowledged selections are exposed through `ShopSnapshot`.
+Native shop intents select stock and confirm or decline the purchase; accepted
+`AddTemplate` grants fill the first free inventory slot, with credit changes
+supplied by authoritative stats. Unity matches placed terminal visuals to the
+server-advertised runtime machine and opens NPC-owned shops through the NPC.
+See [protocol details](../docs/AORebirth.Protocol.md) and [tests](../tests/README.md).
 
 Item use now correlates GenericCmd acknowledgements and reports rejections/timeouts.
 Nano casting sends CharacterAction CastNano; SetNanoDuration and Buff removal
@@ -87,6 +96,8 @@ Native Q combat sends Attack/StopFight. Attack and StopFight replies reconcile
 animation state; AttackInfo/MissedAttackInfo provide damage and miss events.
 Weapon hits update nearby and controlled health immediately, without waiting
 for a separate stat packet. The client does not calculate native weapon damage.
+Explicit zero current HP remains a death even when maximum HP was omitted;
+movement and appearance updates preserve that state for immediate combat shutdown.
 
 World updates wait for the first packet, then drain only packets already queued
 within a four-millisecond processing budget. There is no trailing aggregation

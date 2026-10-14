@@ -20,6 +20,7 @@ internal static partial class WorldDeltaTests
         TestChatText();
         TestFullCharacterState();
         TestHealthStats();
+        TestExplicitZeroHealth();
         TestNativeCombat();
         TestNativeSpecials();
         TestCapturedGameplay();
@@ -28,8 +29,129 @@ internal static partial class WorldDeltaTests
         TestImmediateWorldDelivery();
         TestDespawn();
         TestVendingMachine();
+        TestLootAndShopUpdates();
         Console.WriteLine("PASS AO.Client world delta decoding");
         return 0;
+    }
+
+    private static void TestLootAndShopUpdates()
+    {
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        using var backend = new AORebirthBackend();
+        typeof(AORebirthBackend).GetField("_selectedCharacter", flags)!.SetValue(backend,
+            new AO.Client.Characters.CharacterSummary("44", "Shopper", 1, 1, 1));
+        typeof(AORebirthBackend).GetField("<State>k__BackingField", flags)!.SetValue(backend, AO.Client.ClientConnectionState.InWorld);
+        var apply = typeof(AORebirthBackend).GetMethod("ApplyWorldPacket", flags)!;
+        var deltas = new System.Collections.Generic.List<AO.Client.World.WorldEntityDelta>();
+        void Apply(AORebirthPacket packet) => apply.Invoke(backend, new object[] { packet, deltas, 0, 0 });
+        AORebirthPacket Body(int opcode, Action<MemoryStream> fields, int type = 50000, int owner = 44)
+        {
+            using var body = new MemoryStream();
+            WriteInt(body, opcode); WriteInt(body, type); WriteInt(body, owner); body.WriteByte(0); fields(body);
+            return new AORebirthPacket(10, 0, body.ToArray());
+        }
+        AORebirthPacket Transfer(int owner, int packed, int destination) => Body(0x47537a24, body =>
+        {
+            WriteInt(body, 107); WriteInt(body, packed); WriteInt(body, 50000); WriteInt(body, owner); WriteInt(body, destination);
+        }, owner: owner);
+        AORebirthPacket Trade(int action, int shop = 77, int slot = 0, int owner = 44) => Body(0x36284f6e, body =>
+        {
+            WriteInt(body, 2); body.WriteByte((byte)action); WriteInt(body, 51035); WriteInt(body, shop);
+            WriteInt(body, action == 5 ? 104 : 51035); WriteInt(body, action == 5 ? slot : shop);
+        }, owner: owner);
+        typeof(AORebirthBackend).GetField("_inventory", flags)!.SetValue(backend,
+            new AO.Client.World.InventorySnapshot(30, 50000, 44, 0, new[] {
+                new AO.Client.World.InventoryEntrySnapshot(0x40, 50002, 1000, 100, 100, 1, 1) }));
+        var containers = (System.Collections.Generic.Dictionary<int, AO.Client.World.InventorySnapshot>)
+            typeof(AORebirthBackend).GetField("_containerInventories", flags)!.GetValue(backend)!;
+        containers[2000012] = new AO.Client.World.InventorySnapshot(21, 51050, 2000012, 40000, new[] {
+            new AO.Client.World.InventoryEntrySnapshot(7, 50002, 9001, 121567, 121568, 17, 3),
+            new AO.Client.World.InventoryEntrySnapshot(12, 50002, 9002, 121569, 121570, 25, 1) });
+        var ack = Transfer(44, unchecked((40000 << 16) | 7), 0x42);
+        for (int length = 0; length < ack.Body.Length; length++)
+            Require(!AORebirthProtocol.TryReadContainerTransfer(new AORebirthPacket(10, 0, ack.Body[..length]), 44, out _, out _, out _),
+                "truncated loot acknowledgements are ignored");
+        Apply(Transfer(99, unchecked((40000 << 16) | 7), 0x42));
+        Require(backend.GetInventorySnapshot().Entries.Count == 1, "foreign loot acknowledgements are ignored");
+        Apply(Transfer(44, unchecked((40000 << 16) | 7), 0x40));
+        Require(containers[2000012].Entries.Count == 2, "occupied destinations do not consume corpse contents");
+        Apply(ack);
+        var looted = System.Linq.Enumerable.Single(backend.GetInventorySnapshot().Entries, item => item.Slot == 0x42);
+        Require(looted.IdentityInstance == 9001 && looted.Quality == 17 && looted.Quantity == 3 && looted.HighId == 121568,
+            "loot confirmation immediately preserves item identity, QL, quantity and low/high templates");
+        Require(containers[2000012].Entries.Count == 1 && containers[2000012].Entries[0].Slot == 12,
+            "confirmed sparse corpse slot disappears without reopening");
+        Apply(ack);
+        Require(backend.GetInventorySnapshot().Entries.Count == 2, "duplicate confirmation cannot duplicate loot");
+
+        var stock = Body(0x58362220, body =>
+        {
+            WriteInt(body, 3 * 0x3f1);
+            WriteInt(body, 121571); WriteInt(body, 121572); WriteInt(body, 20);
+            WriteInt(body, 121573); WriteInt(body, 121574); WriteInt(body, 30);
+        }, 51035, 77);
+        for (int length = 0; length < stock.Body.Length; length++)
+            Require(!AORebirthProtocol.TryReadShopStock(new AORebirthPacket(10, 0, stock.Body[..length]), out _),
+                "truncated stock does not produce a partial shop");
+        Apply(stock);
+        var drain = typeof(AORebirthBackend).GetMethod("DrainShop", flags)!;
+        Require(((AO.Client.World.ShopSnapshot)drain.Invoke(backend, null)!).Stock[1].Quality == 30,
+            "server shop stock retains stable stock indexes and QL");
+        Apply(Trade(0));
+        Require(((AO.Client.World.ShopSnapshot)drain.Invoke(backend, null)!).IsOpen, "trade-open enables vendor purchasing");
+        Require(drain.Invoke(backend, null) == null, "shop snapshot is delivered once");
+
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var accept = listener.AcceptTcpClientAsync();
+        using var sender = new System.Net.Sockets.TcpClient();
+        sender.Connect(System.Net.IPAddress.Loopback, ((System.Net.IPEndPoint)listener.LocalEndpoint).Port);
+        using var receiver = accept.GetAwaiter().GetResult();
+        receiver.GetStream().ReadTimeout = 2000;
+        typeof(AORebirthBackend).GetField("_stream", flags)!.SetValue(backend, sender.GetStream());
+        backend.SelectShopItemAsync(77, 1).GetAwaiter().GetResult();
+        var selectWire = new byte[52]; receiver.GetStream().ReadExactly(selectWire);
+        var expected = AORebirthProtocol.CreateShopTrade(44, 5, 51035, 77, 1);
+        Require(selectWire[16..50].AsSpan().SequenceEqual(expected[16..]), "native selection goes through padded AO transport");
+        Require(new BigEndianReader(expected, 16 + 18).ReadInt32() == 51035
+            && new BigEndianReader(expected, 16 + 22).ReadInt32() == 77
+            && new BigEndianReader(expected, 16 + 30).ReadInt32() == 1,
+            "shop pick targets exact vendor identity and stock index");
+        Apply(Trade(5, shop: 88, slot: 1)); Apply(Trade(5, slot: 1, owner: 99));
+        Require(drain.Invoke(backend, null) == null, "foreign shop or owner selection acknowledgements are ignored");
+        Apply(Trade(5, slot: 1));
+        Require(((AO.Client.World.ShopSnapshot)drain.Invoke(backend, null)!).SelectedSlots[0] == 1,
+            "only acknowledged shop selections enter purchase queue");
+        backend.CompleteShopAsync(77, true).GetAwaiter().GetResult();
+        var buyWire = new byte[52]; receiver.GetStream().ReadExactly(buyWire);
+        Require(buyWire[33] == 3, "buy sends native confirm action");
+        Apply(Body(0x052e2f0c, body =>
+        {
+            WriteInt(body, 121574); WriteInt(body, 121573); WriteInt(body, 30); WriteInt(body, 2);
+        }));
+        Require(System.Linq.Enumerable.Single(backend.GetInventorySnapshot().Entries, item => item.Slot == 0x41).Quantity == 2,
+            "server purchase grant fills first free inventory slot immediately");
+        Apply(Trade(4));
+        Require(!((AO.Client.World.ShopSnapshot)drain.Invoke(backend, null)!).IsOpen,
+            "server completion closes purchase session");
+        Apply(Trade(5, slot: 1));
+        Require(drain.Invoke(backend, null) == null, "late pick cannot reopen completed shop");
+        Require((bool)typeof(AORebirthBackend).GetField("_inventoryChanged", flags)!.GetValue(backend)!,
+            "loot and purchase confirmation schedule immediate inventory delivery");
+        var changed = (System.Collections.Generic.IReadOnlyList<AO.Client.World.InventorySnapshot>)
+            typeof(AORebirthBackend).GetMethod("DrainContainerUpdates", flags)!.Invoke(backend, null)!;
+        Require(changed.Count == 1 && changed[0].Entries.Count == 1, "corpse contents update accompanies loot inventory delivery");
+        var mailboxType = typeof(AORebirthBackend).GetNestedType("WorldPacketMailbox", System.Reflection.BindingFlags.NonPublic)!;
+        var mailbox = Activator.CreateInstance(mailboxType, true)!;
+        typeof(AORebirthBackend).GetField("_worldPackets", flags)!.SetValue(backend, mailbox);
+        typeof(AORebirthBackend).GetField("_worldStream", flags)!.SetValue(backend, new MemoryStream());
+        typeof(AORebirthBackend).GetField("_currentPlayfieldId", flags)!.SetValue(backend, 127);
+        mailboxType.GetMethod("Write")!.Invoke(mailbox, new object[] { Transfer(44, unchecked((40000 << 16) | 12), 0x43) });
+        var delivery = backend.ReceiveWorldDeltasAsync(128);
+        Require(delivery.IsCompletedSuccessfully && delivery.Result.Inventory.Entries.Count == 4
+            && delivery.Result.ContainerInventories.Count == 1 && delivery.Result.ContainerInventories[0].Entries.Count == 0,
+            "isolated loot acknowledgement immediately delivers inventory and empty corpse through the world poll");
+        Console.WriteLine("PASS immediate loot updates, unsigned corpse handles, vendor stock/open/select/buy/completion and item grants");
     }
 
     private static void TestNanoCastTargets()
@@ -723,6 +845,30 @@ internal static partial class WorldDeltaTests
         Require(move.X == 12.5f && move.Y == 3.25f && move.Z == -8.5f, "movement coordinates");
         Require(move.MoveType == 1 && move.HasHeading && move.HeadingW == 1f,
             "movement state and heading");
+    }
+
+    private static void TestExplicitZeroHealth()
+    {
+        var unknown = new AO.Client.World.NearbyEntity(50000, 99, AO.Client.World.NearbyEntityKind.Npc,
+            "Unknown health target", 1, 0, 0, 127, 0, 0, 0);
+        Require(!unknown.IsDead, "omitted initial health is not a death event");
+        var dead = unknown.WithHealth(0, 0);
+        Require(dead.IsDead && dead.WithPosition(1, 2, 3).WithEquipmentAppearance(null).WithVisualStats(1, 100, null).IsDead,
+            "explicit zero current health survives position and appearance changes even without max health");
+        Require(!dead.WithHealth(100, 100).IsDead, "authoritative revival clears explicit death");
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        using var backend = new AORebirthBackend();
+        var entities = (System.Collections.Generic.Dictionary<string, AO.Client.World.NearbyEntity>)
+            typeof(AORebirthBackend).GetField("_worldEntities", flags)!.GetValue(backend)!;
+        entities["50000:99"] = unknown;
+        using var body = new MemoryStream();
+        WriteInt(body, AORebirthProtocol.Stat); WriteInt(body, 50000); WriteInt(body, 99);
+        body.WriteByte(0); WriteInt(body, 1); WriteInt(body, 27); WriteInt(body, 0);
+        var deltas = new System.Collections.Generic.List<AO.Client.World.WorldEntityDelta>();
+        typeof(AORebirthBackend).GetMethod("ApplyWorldPacket", flags)!.Invoke(backend,
+            new object[] { new AORebirthPacket(10, 0, body.ToArray()), deltas, 0, 0 });
+        Require(entities["50000:99"].IsDead && deltas.Count == 1 && deltas[0].Entity.IsDead,
+            "zero-HP stat packet immediately delivers target death before stop/despawn");
     }
 
     private static void TestHealthStats()

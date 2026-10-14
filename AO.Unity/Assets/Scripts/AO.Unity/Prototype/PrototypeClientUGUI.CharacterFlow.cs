@@ -164,6 +164,8 @@ namespace AO.Unity.Prototype
             _gameServerSession.NanoEffectsRestored += HandleServerNanoSnapshot;
             _gameServerSession.InventoryChanged -= HandleServerInventoryChanged;
             _gameServerSession.InventoryChanged += HandleServerInventoryChanged;
+            _gameServerSession.ShopChanged -= HandleServerShopChanged;
+            _gameServerSession.ShopChanged += HandleServerShopChanged;
             _gameServerSession.EntityRemoved -= HandleNativeEntityRemoved;
             _gameServerSession.EntityRemoved += HandleNativeEntityRemoved;
             _gameServerSession.CharacterStateChanged -= HandleServerCharacterStateChanged;
@@ -2280,6 +2282,10 @@ namespace AO.Unity.Prototype
                 _uiBodyRoot.gameObject.SetActive(!active);
             if (active)
             {
+                if (_vendorWindow?.Root != null) _vendorWindow.Root.gameObject.SetActive(false);
+                _nativeShop = null;
+                _nativeVendorInstance = 0; _vendorClosing = false; ++_vendorRequestVersion;
+                _selectedNativeVendor = null; _selectedNativeVendorVisual = null;
                 if (_targetMarkerRoot != null) _targetMarkerRoot.gameObject.SetActive(false);
                 if (_topTargetBarRoot != null) _topTargetBarRoot.gameObject.SetActive(false);
                 SetNanoCastBarVisible(false);

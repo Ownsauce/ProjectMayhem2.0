@@ -20,6 +20,11 @@ code.
 - Static-object discovery translates vending machines and preserves door/corpse
   identities without leaking their AORebirth packet layouts.
 - Unity still uses `AuthoritativeNetworkClient` directly during the migration.
+- Confirmed corpse transfers publish both the main inventory and remaining loot
+  immediately. Purchase grants also update the main inventory.
+- Native shops expose server stock, open/closed state, and acknowledged purchase
+  selections through `ShopSnapshot`. Backend intents select stock and confirm or
+  decline; server replies own item grants and credit changes.
 
 ## Recommended Direction
 
